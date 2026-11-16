@@ -91,7 +91,7 @@ def icon():
 
 def dmg_background(scale):
     """Fundo bilíngue da janela do instalador: ícones no alto, passos em PT e EN embaixo."""
-    W, H = 680 * scale, 500 * scale
+    W, H = 680 * scale, 580 * scale
     img = Image.new('RGB', (W, H), BG)
     d = ImageDraw.Draw(img)
     s = scale
@@ -104,22 +104,22 @@ def dmg_background(scale):
     d.polygon([(420 * s, y - 12 * s), (440 * s, y), (420 * s, y + 12 * s)], fill=(190, 190, 185))
     # caixa de instruções, duas colunas
     bx, by, bw = 40 * s, 296 * s, W - 80 * s
-    d.rounded_rectangle([bx, by, bx + bw, H - 22 * s], radius=12 * s, fill=(255, 255, 255),
+    d.rounded_rectangle([bx, by, bx + bw, by + 168 * s], radius=12 * s, fill=(255, 255, 255),
                         outline=(226, 226, 222), width=max(1, s))
-    d.line([(bx + bw // 2, by + 16 * s), (bx + bw // 2, H - 58 * s)], fill=(232, 232, 228), width=max(1, s))
+    d.line([(bx + bw // 2, by + 16 * s), (bx + bw // 2, by + 132 * s)], fill=(232, 232, 228), width=max(1, s))
     cols = [
         ('Na primeira vez que abrir', [
             '1. O Mac avisa que não verificou o app:',
             '    feche o aviso (não mova para o Lixo).',
-            '2. Ajustes do Sistema › Privacidade e',
-            '    Segurança › Abrir Mesmo Assim.',
+            '2. Duplo clique em “Abrir Ajustes de',
+            '    Segurança” abaixo › Abrir Mesmo Assim.',
             '3. Pronto. Só precisa fazer uma vez.',
         ]),
         ('The first time you open it', [
             '1. macOS says it could not verify the app:',
             '    close it (don’t move it to the Trash).',
-            '2. System Settings › Privacy & Security ›',
-            '    Open Anyway.',
+            '2. Double-click “Abrir Ajustes de',
+            '    Segurança” below › Open Anyway.',
             '3. Done. You only need to do this once.',
         ]),
     ]
@@ -128,10 +128,25 @@ def dmg_background(scale):
         d.text((x, by + 14 * s), title, font=font(13 * s, 'SemiBold'), fill=INK)
         for i, ln in enumerate(lines):
             d.text((x, by + (40 + i * 20) * s), ln, font=font(11 * s, 'Regular'), fill=INK)
-    d.text((bx + 18 * s, H - 44 * s), 'Terminal:  xattr -cr "/Applications/Second Take.app"',
+    d.text((bx + 18 * s, by + 144 * s), 'Terminal:  xattr -cr "/Applications/Second Take.app"',
            font=font(10 * s, 'Regular'), fill=MUTED)
     name = 'dmg_background.png' if scale == 1 else 'dmg_background@2x.png'
     img.save(os.path.join(OUT, name), dpi=(72 * scale, 72 * scale))
+
+
+def social_preview():
+    """Imagem de prévia de links (GitHub "Social preview" e página de download), 1280×640."""
+    W, H = 1280, 640
+    img = Image.new('RGB', (W, H), (24, 26, 30))
+    d = ImageDraw.Draw(img)
+    icon = Image.open(os.path.join(OUT, 'icon_1024.png')).resize((360, 360), Image.LANCZOS)
+    img.paste(icon, (90, 140), icon)
+    d.text((500, 175), 'Second Take', font=font(92, 'Bold'), fill=(245, 245, 242))
+    d.text((504, 290), 'Recuperação de clipes de câmera corrompidos', font=font(31, 'Regular'), fill=(200, 200, 195))
+    d.text((504, 338), 'Recovery for corrupted camera clips', font=font(30, 'Regular'), fill=(140, 140, 135))
+    d.text((504, 420), 'Sony XAVC S  ·  macOS e Windows  ·  grátis e open source', font=font(26, 'Regular'),
+           fill=(76, 141, 246))
+    img.save(os.path.join(OUT, 'social_preview.png'))
 
 
 if __name__ == '__main__':
@@ -139,4 +154,5 @@ if __name__ == '__main__':
     icon()
     dmg_background(1)
     dmg_background(2)
+    social_preview()
     print('assets gerados em', os.path.abspath(OUT))

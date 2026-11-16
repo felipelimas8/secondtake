@@ -55,6 +55,9 @@ STAGE=build/dmg
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
 cp "assets/Leia-me · Read me.txt" "$STAGE/"
+# atalho que abre Ajustes do Sistema > Privacidade e Segurança (gerado aqui, no formato que o Finder lê)
+LINK="$STAGE/Abrir Ajustes de Segurança.webloc"
+/usr/libexec/PlistBuddy -c "Add :URL string x-apple.systempreferences:com.apple.preference.security?Security" "$LINK" >/dev/null
 if command -v create-dmg >/dev/null 2>&1; then
   BG=assets/dmg_background.png
   if [ -f assets/dmg_background@2x.png ]; then
@@ -67,11 +70,12 @@ if command -v create-dmg >/dev/null 2>&1; then
     create-dmg \
       --volname "Second Take $VERSION" ${VOLICON[@]+"${VOLICON[@]}"} \
       --background "$BG" \
-      --window-pos 200 120 --window-size 680 520 \
+      --window-pos 200 120 --window-size 680 620 \
       --icon-size 104 --text-size 13 \
       --icon "Second Take.app" 170 200 --hide-extension "Second Take.app" \
       --app-drop-link 510 200 \
       --icon "Leia-me · Read me.txt" 600 52 \
+      --icon "Abrir Ajustes de Segurança.webloc" 340 520 --hide-extension "Abrir Ajustes de Segurança.webloc" \
       --no-internet-enable "$@" \
       "$DMG" "$STAGE" >/dev/null
   }
