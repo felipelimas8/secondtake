@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+*.spec
+.pytest_cache/
+.venv/
+.DS_Store
+# nunca versionar material de câmera
+*.MP4
+*.mp4
+*.MOV
+*.mov
+*.MXF
+*.mxf
+*.h264
+*.wav

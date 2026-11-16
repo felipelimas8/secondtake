@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "secondtake"
+dynamic = ["version"]
+description = "Diagnóstico e recuperação de clipes de câmera corrompidos (Sony XAVC S)"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "Super8 Produtora" }]
+keywords = ["video", "recovery", "xavc", "sony", "mp4", "repair", "dit"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Operating System :: MacOS",
+  "Topic :: Multimedia :: Video",
+  "Environment :: X11 Applications :: Tk",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+build = ["pyinstaller>=6"]
+
+[project.scripts]
+secondtake = "secondtake.cli:main"
+
+[project.gui-scripts]
+secondtake-gui = "secondtake.gui:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "secondtake.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

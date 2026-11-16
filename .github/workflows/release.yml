@@ -1,0 +1,27 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  macos-app:
+    strategy:
+      matrix:
+        os: [macos-latest]   # Apple Silicon; acrescente um runner Intel se precisar
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: brew install ffmpeg
+      - run: python -m pip install -e ".[dev]" && python -m pytest -q
+      - run: scripts/build_macos.sh
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/SecondTake-*-macOS-*.zip
+          generate_release_notes: true
