@@ -141,23 +141,190 @@ def find_moov(path: str) -> tuple[int, bytes] | None:
 # ---------------------------------------------------------------- Sony XML
 
 def sony_xml(path: str) -> dict:
+    """Metadados do XML que as Sony gravam ao lado do clipe (C0001M01.XML)."""
     stem = os.path.splitext(path)[0]
     for cand in (stem + 'M01.XML', stem + 'M01.xml'):
-        if os.path.exists(cand):
-            try:
-                import xml.etree.ElementTree as ET
-                r = ET.parse(cand).getroot()
-                ns = {'n': r.tag.split('}')[0][1:]}
-                vf = r.find('.//n:VideoFrame', ns)
-                dev = r.find('n:Device', ns)
-                return {
-                    'codec': vf.get('videoCodec', '') if vf is not None else '',
-                    'fps': vf.get('captureFps', '') if vf is not None else '',
-                    'camera': dev.get('modelName', '') if dev is not None else '',
-                }
-            except Exception:
-                pass
+        if not os.path.exists(cand):
+            continue
+        try:
+            import xml.etree.ElementTree as ET
+            r = ET.parse(cand).getroot()
+            ns = {'n': r.tag.split('}')[0][1:]}
+            g = lambda q, a: (r.find(q, ns).get(a, '') if r.find(q, ns) is not None else '')  # noqa: E731
+            item = lambda name: g(f".//n:Item[@name='{name}']", 'value')  # noqa: E731
+            tc = r.find('.//n:LtcChangeTable/n:LtcChange', ns)
+            tc_fps = g('.//n:LtcChangeTable', 'tcFps')
+            out = {
+                'codec': g('.//n:VideoFrame', 'videoCodec'),
+                'fps': g('.//n:VideoFrame', 'captureFps'),
+                'format_fps': g('.//n:VideoFrame', 'formatFps'),
+                'camera': g('n:Device', 'modelName'),
+                'serial': g('n:Device', 'serialNo'),
+                'gamma': item('CaptureGammaEquation'),
+                'primaries': item('CaptureColorPrimaries'),
+                'created': g('n:CreationDate', 'value'),
+                'audio_codec': g('.//n:AudioRecPort', 'audioCodec'),
+                'lens': g('.//n:Lens', 'modelName') or item('LensModelName'),
+            }
+            if tc is not None and tc.get('value') and len(tc.get('value')) == 8:
+                # LTC em BCD, bytes invertidos (FF SS MM HH) com bits de flag misturados
+                b = bytes.fromhex(tc.get('value'))
+                ff, ss, mm, hh = b[0] & 0x3F, b[1] & 0x7F, b[2] & 0x7F, b[3] & 0x3F
+                out['timecode'] = f'{hh:02x}:{mm:02x}:{ss:02x}:{ff:02x}'
+            if tc_fps:
+                out['tc_fps'] = tc_fps
+            return {k: v for k, v in out.items() if v and v != '4294967295'}
+        except Exception:
+            pass
     return {}
+
+
+def _ue(bits, pos):
+    """Exp-Golomb sem sinal (SPS H.264)."""
+    z = 0
+    while pos < len(bits) and bits[pos] == '0':
+        z += 1
+        pos += 1
+    pos += 1
+    val = (1 << z) - 1 + (int(bits[pos:pos + z], 2) if z else 0)
+    return val, pos + z
+
+
+H264_PROFILES = {66: 'Baseline', 77: 'Main', 88: 'Extended', 100: 'High', 110: 'High 10',
+                 122: 'High 4:2:2', 244: 'High 4:4:4'}
+
+
+def _avc_info(stsd: bytes) -> dict:
+    i = stsd.find(b'avcC')
+    if i < 0:
+        return {}
+    a = i + 4
+    prof, level = stsd[a + 1], stsd[a + 3]
+    info = {'profile': H264_PROFILES.get(prof, str(prof)), 'level': f'{level // 10}.{level % 10}'}
+    try:
+        ln = int.from_bytes(stsd[a + 6:a + 8], 'big')
+        sps = stsd[a + 8:a + 8 + ln]
+        raw = bytearray()
+        z = 0
+        for b in sps[1:]:                       # remove emulation prevention (00 00 03)
+            if z >= 2 and b == 3:
+                z = 0
+                continue
+            raw.append(b)
+            z = z + 1 if b == 0 else 0
+        bits = ''.join(f'{b:08b}' for b in raw)
+        pos = 24
+        _, pos = _ue(bits, pos)                 # seq_parameter_set_id
+        chroma, depth = 1, 8
+        if prof in (100, 110, 122, 244, 44, 83, 86, 118, 128):
+            chroma, pos = _ue(bits, pos)
+            if chroma == 3:
+                pos += 1
+            dl, pos = _ue(bits, pos)
+            depth = dl + 8
+        info['chroma'] = {0: '4:0:0', 1: '4:2:0', 2: '4:2:2', 3: '4:4:4'}.get(chroma, '?')
+        info['bit_depth'] = depth
+    except Exception:
+        pass
+    return info
+
+
+def _fps_label(fps: float) -> str:
+    for nominal, label in ((23.976, '23.976'), (29.97, '29.97'), (59.94, '59.94'), (119.88, '119.88'),
+                           (47.952, '47.952')):
+        if abs(fps - nominal) < 0.01:
+            return label
+    return f'{fps:.3f}'.rstrip('0').rstrip('.')
+
+
+def read_meta(path: str, moov: bytes | None = None) -> dict:
+    """Metadados técnicos do clipe: do moov (quando existe) e do XML da Sony."""
+    from .rebuild import Box
+    meta = {'file_size': os.path.getsize(path)}
+    meta.update({f'xml_{k}': v for k, v in sony_xml(path).items()})
+    if moov is None:
+        m = find_moov(path)
+        moov = m[1] if m else None
+    if not moov:
+        return meta
+    try:
+        root = Box.parse(moov)[0]
+        mv = root.find(b'mvhd').data
+        ts, dur = (struct.unpack('>IQ', mv[20:32]) if mv[0] == 1 else struct.unpack('>II', mv[12:20]))
+        if ts:
+            meta['duration'] = dur / ts
+        for t in root.all(b'trak'):
+            h = t.find(b'mdia', b'hdlr').data[8:12]
+            md = t.find(b'mdia', b'mdhd').data
+            mts, mdur = (struct.unpack('>IQ', md[20:32]) if md[0] == 1 else struct.unpack('>II', md[12:20]))
+            stbl = t.find(b'mdia', b'minf', b'stbl')
+            sd = stbl.find(b'stsd').data
+            ent = 8
+            fmt = sd[ent + 4:ent + 8].decode('latin1')
+            if h == b'vide':
+                w, hh = struct.unpack('>HH', sd[ent + 32:ent + 36])
+                sz = stbl.find(b'stsz').data
+                fixed, n = struct.unpack('>II', sz[4:12])
+                vbytes = fixed * n if fixed else sum(struct.unpack(f'>{n}I', sz[12:12 + 4 * n]))
+                meta.update({'video_codec': fmt, 'width': w, 'height': hh, 'frames': n})
+                if mdur and mts:
+                    meta['fps'] = n * mts / mdur
+                    meta['video_bitrate'] = vbytes * 8 / (mdur / mts)
+                meta.update(_avc_info(sd))
+            elif h == b'soun':
+                ch, bits = struct.unpack('>HH', sd[ent + 24:ent + 28])
+                meta.update({'audio_codec': {'twos': 'LPCM', 'sowt': 'LPCM', 'lpcm': 'LPCM',
+                                             'mp4a': 'AAC'}.get(fmt, fmt),
+                             'audio_channels': ch, 'audio_bits': bits, 'audio_rate': mts})
+        if meta.get('duration'):
+            meta['bitrate'] = meta['file_size'] * 8 / meta['duration']
+    except Exception:
+        pass
+    return meta
+
+
+def meta_rows(c: 'Clip') -> list[tuple[str, str]]:
+    """Linhas (rótulo, valor) prontas para exibir, já no idioma atual."""
+    m = c.extra.get('meta') or {}
+    rows = []
+
+    def add(key, val):
+        if val not in (None, '', '—'):
+            rows.append((tr(key), str(val)))
+
+    add('meta.camera', ' · '.join(x for x in (m.get('xml_camera'), m.get('xml_serial') and f"S/N {m['xml_serial']}")
+                                  if x))
+    add('meta.created', (m.get('xml_created') or '').replace('T', ' ')[:19])
+    add('meta.timecode', m.get('xml_timecode'))
+    add('meta.lens', m.get('xml_lens'))
+    if m.get('width'):
+        add('meta.resolution', f"{m['width']} × {m['height']}")
+    codec = ' '.join(x for x in ('H.264' if m.get('video_codec') == 'avc1' else m.get('video_codec'),
+                                 m.get('profile'), m.get('level') and f"L{m['level']}") if x)
+    if m.get('chroma'):
+        codec += f" · {m['chroma']} {m.get('bit_depth', '')}-bit"
+    add('meta.codec', codec)
+    add('meta.xavc', m.get('xml_codec'))
+    if m.get('fps'):
+        fps = _fps_label(m['fps'])
+        cap = m.get('xml_fps', '').rstrip('p')
+        add('meta.fps', fps + (f"  ({tr('meta.capture')} {cap})" if cap and cap != fps else ''))
+    elif m.get('xml_fps'):
+        add('meta.fps', m['xml_fps'])
+    if m.get('duration'):
+        s = m['duration']
+        add('meta.duration', f'{int(s // 3600):02d}:{int(s % 3600 // 60):02d}:{s % 60:05.2f}')
+    if m.get('video_bitrate'):
+        add('meta.bitrate', f"{m['video_bitrate'] / 1e6:.0f} Mb/s")
+    elif m.get('bitrate'):
+        add('meta.bitrate_file', f"{m['bitrate'] / 1e6:.0f} Mb/s")
+    add('meta.color', ' / '.join(x for x in (m.get('xml_gamma'), m.get('xml_primaries')) if x))
+    if m.get('audio_codec'):
+        add('meta.audio', f"{m['audio_codec']} · {m.get('audio_channels')} ch · {m.get('audio_rate', 0) / 1000:g} kHz"
+                          f" · {m.get('audio_bits')}-bit")
+    add('meta.size', f"{m.get('file_size', c.size) / 1e9:.2f} GB" if m.get('file_size', c.size) > 1e9
+        else f"{m.get('file_size', c.size) / 1e6:.1f} MB")
+    return rows
 
 
 # ---------------------------------------------------------------- diagnóstico
@@ -214,7 +381,8 @@ def _audio_peak_db(path: str, tracks: list[Track], samples: int = 12) -> float |
 
 def diagnose(path: str) -> Clip:
     c = Clip(path, os.path.getsize(path))
-    c.__dict__.update({k: v for k, v in sony_xml(path).items()})
+    xml = sony_xml(path)
+    c.camera, c.codec, c.fps = xml.get('camera', ''), xml.get('codec', ''), xml.get('fps', '')
     if c.size == 0:
         c.status, c.detail = EMPTY, L('diag.empty_file')
         return c
@@ -226,8 +394,10 @@ def diagnose(path: str) -> Clip:
     if m is None:
         c.status = NO_MOOV
         c.detail = L('diag.no_moov')
+        c.extra['meta'] = read_meta(path, b'')
         return c
     c.moov_pos, moov = m
+    c.extra['meta'] = read_meta(path, moov)
     try:
         tracks = parse_moov(moov)
     except Exception as e:
@@ -502,6 +672,7 @@ def write_report(clips: list[Clip], path: str):
     """Relatório CSV no idioma atual. A coluna `status` mantém o código fixo (para scripts);
     `status_label` traz o nome traduzido."""
     cols = ['name', 'status', 'status_label', 'action', 'detail', 'camera', 'codec', 'fps', 'size',
+            'resolution', 'video', 'duration', 'bitrate', 'color', 'audio', 'timecode', 'created',
             'audio_db', 'reference', 'output', 'verify', 'path']
     with open(path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
@@ -516,4 +687,18 @@ def write_report(clips: list[Clip], path: str):
                 'reference': os.path.basename(c.reference), 'output': c.output,
                 'verify': str(c.verify), 'path': c.path,
             }
+            m = c.extra.get('meta') or {}
+            row.update({
+                'resolution': f"{m['width']}x{m['height']}" if m.get('width') else '',
+                'video': ' '.join(str(x) for x in (m.get('profile'), m.get('chroma'),
+                                                   m.get('bit_depth') and f"{m['bit_depth']}bit") if x),
+                'duration': f"{m['duration']:.2f}" if m.get('duration') else '',
+                'bitrate': f"{(m.get('video_bitrate') or m['bitrate']) / 1e6:.1f}" if m.get('bitrate') else '',
+                'color': ' / '.join(x for x in (m.get('xml_gamma'), m.get('xml_primaries')) if x),
+                'audio': f"{m.get('audio_codec')} {m.get('audio_channels')}ch {m.get('audio_rate')}Hz "
+                         f"{m.get('audio_bits')}bit" if m.get('audio_codec') else '',
+                'timecode': m.get('xml_timecode', ''), 'created': m.get('xml_created', ''),
+            })
+            if not row['fps'] and m.get('fps'):
+                row['fps'] = _fps_label(m['fps'])
             w.writerow([row[k] for k in cols])

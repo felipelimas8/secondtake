@@ -31,7 +31,7 @@ ICON=()
 
 python3 -m PyInstaller --windowed --noconfirm --clean \
   --name "Second Take" --paths src --collect-submodules secondtake \
-  --collect-data customtkinter --collect-data secondtake \
+  --collect-data customtkinter --collect-data secondtake --collect-all tkinterdnd2 \
   --osx-bundle-identifier br.com.super8.secondtake \
   ${ICON[@]+"${ICON[@]}"} scripts/secondtake_app.py
 

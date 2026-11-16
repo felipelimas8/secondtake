@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.9.0 — 2026-11-16
+- **Arrastar e soltar**: solte clipes ou uma pasta em qualquer lugar da janela para analisar. A área da lista se destaca ao arrastar. Mac e Windows.
+- **Detalhes do clipe**: painel lateral com câmera, número de série, data, timecode, resolução, codec (perfil, nível, 4:2:2/4:2:0, 8/10-bit), formato XAVC, quadros/s (e de captura, em S&Q), duração, bitrate do vídeo, perfil de cor (S-Log3/S-Gamut3.Cine) e áudio. Também no relatório CSV. Lidos do índice do arquivo e do XML da Sony; funciona até em clipes danificados.
+- Instalador do Mac com um só "Leia-me · Read me.txt" bilíngue.
+
 ## 0.8.0 — 2026-11-16
 - **Windows**: instalador `SecondTake-…-Windows-x64-Setup.exe` (Inno Setup, em português e inglês, instala só para o usuário, sem senha de administrador, com atalho no menu Iniciar e desinstalador) e versão portátil `.zip`.
 - No Windows: menu **Arquivo** com Ajustes (Ctrl+,) e Sair; ícone próprio na janela e no executável; ffmpeg encontrado também em winget, Chocolatey, Scoop e `C:\ffmpeg`; sem janelas de console piscando ao verificar; idioma do Windows detectado.

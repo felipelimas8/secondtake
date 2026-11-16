@@ -3,4 +3,4 @@
 Copyright (C) 2026 Super8 Produtora
 Licenciado sob a GNU General Public License v3 ou posterior.
 """
-__version__ = '0.8.0'
+__version__ = '0.9.0'

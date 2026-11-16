@@ -19,6 +19,11 @@ from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
+try:  # arrastar e soltar (opcional: sem a biblioteca, o app segue só com os botões)
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+except Exception:  # pragma: no cover
+    DND_FILES = TkinterDnD = None
+
 from . import __version__, core, i18n, updater
 from .i18n import L, msg, t
 
@@ -125,12 +130,22 @@ def secondary(**kw):
 
 # ======================================================================= app
 
-class App(ctk.CTk):
+_DnDBase = TkinterDnD.DnDWrapper if TkinterDnD else object
+
+
+class App(ctk.CTk, _DnDBase):
     def __init__(self):
         i18n.init()
         ctk.set_appearance_mode('system')
         ctk.set_default_color_theme('blue')
         super().__init__(fg_color=PAL['bg'])
+        self.dnd = False
+        if TkinterDnD:
+            try:
+                self.TkdndVersion = TkinterDnD._require(self)
+                self.dnd = True
+            except Exception:
+                self.dnd = False
         self.geometry('1240x760')
         self.minsize(980, 600)
         self.clips: list[core.Clip] = []
@@ -269,7 +284,7 @@ class App(ctk.CTk):
         cols = ('status', 'action', 'audio', 'size', 'ref', 'detail')
         heads = ('app.col_status', 'app.col_action', 'app.col_audio', 'app.col_size', 'app.col_ref',
                  'app.col_detail')
-        widths = (130, 100, 80, 90, 190, 420)
+        widths = (120, 95, 70, 80, 170, 300)
         self._style_ttk()
         self.tree = ttk.Treeview(self.body, columns=cols, show='tree headings', selectmode='extended',
                                  style='ST.Treeview')
@@ -282,13 +297,21 @@ class App(ctk.CTk):
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.grid(row=0, column=0, sticky='nsew', padx=(2, 0), pady=2)
         sb.grid(row=0, column=1, sticky='ns', pady=6)
-        self.tree.bind('<<TreeviewSelect>>', lambda e: self._update_actions())
+        self.tree.bind('<<TreeviewSelect>>', lambda e: (self._update_actions(), self._show_details()))
+
+        # painel de detalhes (metadados do clipe selecionado)
+        self.details = ctk.CTkFrame(self.body, fg_color=PAL['card2'], corner_radius=8, width=300)
+        self.details.grid(row=0, column=2, sticky='nsew', padx=(6, 6), pady=6)
+        self.details.grid_propagate(False)
+        self.details.grid_columnconfigure(0, weight=1)
         self.tree.bind('<Double-1>', lambda e: self.advanced())
         self._tag_colors()
 
         # estado vazio
         self.empty = ctk.CTkFrame(self.body, fg_color='transparent')
-        ctk.CTkLabel(self.empty, text=t('app.empty_title'), font=(FONT, 17, 'bold'),
+        if self.dnd:
+            ctk.CTkLabel(self.empty, text='⇣', font=(FONT, 40), text_color=PAL['muted']).pack()
+        ctk.CTkLabel(self.empty, text=t('app.drop_title' if self.dnd else 'app.empty_title'), font=(FONT, 17, 'bold'),
                      text_color=PAL['text']).pack(pady=(0, 6))
         ctk.CTkLabel(self.empty, text=t('app.empty_body'), font=(FONT, 13), text_color=PAL['muted'],
                      justify='center').pack(pady=(0, 16))
@@ -337,6 +360,55 @@ class App(ctk.CTk):
                                      command=self.repair, fg_color=PAL['accent'], hover_color=PAL['accent_h'])
         self.btn_fix.pack(side='left', padx=(8, 0))
         self._refresh()
+        self._show_details()
+        self._setup_drop()
+
+    # ------------------------------------------------------------ arrastar e soltar
+    def _setup_drop(self):
+        if not self.dnd:
+            return
+        for w in (self, self.body, self.tree, self.empty):
+            try:
+                w.drop_target_register(DND_FILES)
+                w.dnd_bind('<<DropEnter>>', self._drop_enter)
+                w.dnd_bind('<<DropLeave>>', self._drop_leave)
+                w.dnd_bind('<<Drop>>', self._drop)
+            except Exception:
+                pass
+
+    def _drop_enter(self, e):
+        if not self.busy:
+            self.body.configure(border_color=PAL['accent'], border_width=2)
+        return e.action
+
+    def _drop_leave(self, e):
+        self.body.configure(border_color=PAL['border'], border_width=1)
+        return e.action
+
+    def _drop(self, e):
+        self._drop_leave(e)
+        if self.busy:
+            return e.action
+        self.open_paths(self.tk.splitlist(e.data))
+        return e.action
+
+    def open_paths(self, paths):
+        """Pasta solta: analisa a pasta. Arquivos soltos: analisa só eles."""
+        paths = [os.path.abspath(p) for p in paths if os.path.exists(p)]
+        dirs = [p for p in paths if os.path.isdir(p)]
+        files = [p for p in paths if os.path.isfile(p) and p.lower().endswith(core.VIDEO_EXT)]
+        if dirs:
+            d = dirs[0]
+            self.src.set(d)
+            self._set_subtitle(d)
+            self._start_scan(L('app.scanning_folder'), lambda prog: core.scan(d, prog))
+        elif files:
+            base = os.path.commonpath([os.path.dirname(p) for p in files])
+            self.src.set(base)
+            self._set_subtitle(L('app.files_in', n=len(files), path=base))
+            self._start_scan(L('app.scanning_files'), lambda prog: core.scan_files(files, prog))
+        else:
+            self._set_status(L('app.drop_none'))
 
     def _style_ttk(self):
         """Treeview é ttk. O tema 'clam' é obrigatório: o 'aqua' do macOS ignora cores e
@@ -363,6 +435,35 @@ class App(ctk.CTk):
         self.tree.tag_configure('ok', foreground=col('muted'))
         for k in ('warn', 'info', 'danger', 'muted'):
             self.tree.tag_configure(k, foreground=col('text'))
+
+    def _show_details(self):
+        for w in self.details.winfo_children():
+            w.destroy()
+        sel = self._selected()
+        ctk.CTkLabel(self.details, text=t('meta.title'), font=(FONT, 13, 'bold'), text_color=PAL['text'],
+                     anchor='w').grid(row=0, column=0, sticky='ew', padx=14, pady=(12, 2))
+        if len(sel) != 1:
+            ctk.CTkLabel(self.details, text=t('meta.none'), font=(FONT, 12), text_color=PAL['muted'], anchor='w',
+                         justify='left', wraplength=260).grid(row=1, column=0, sticky='ew', padx=14, pady=4)
+            return
+        c = sel[0]
+        ctk.CTkLabel(self.details, text=c.name, font=(MONO, 11), text_color=PAL['muted'], anchor='w').grid(
+            row=1, column=0, sticky='ew', padx=14, pady=(0, 8))
+        rows = core.meta_rows(c)
+        box = ctk.CTkFrame(self.details, fg_color='transparent')
+        box.grid(row=2, column=0, sticky='nsew', padx=14)
+        box.grid_columnconfigure(1, weight=1)
+        for i, (k, v) in enumerate(rows):
+            ctk.CTkLabel(box, text=k, font=(FONT, 11), text_color=PAL['muted'], anchor='nw', height=16).grid(
+                row=i, column=0, sticky='nw', padx=(0, 10), pady=3)
+            ctk.CTkLabel(box, text=v, font=(FONT, 11), text_color=PAL['text'], anchor='nw', justify='left',
+                         wraplength=170, height=16).grid(row=i, column=1, sticky='nw', pady=3)
+
+        def copy():
+            self.clipboard_clear()
+            self.clipboard_append(c.name + '\n' + '\n'.join(f'{k}: {v}' for k, v in rows))
+        ctk.CTkButton(self.details, text=t('meta.copy'), width=80, height=26, font=(FONT, 11), command=copy,
+                      **secondary()).grid(row=3, column=0, sticky='w', padx=14, pady=(10, 12))
 
     def _on_view(self, value):
         self.only_bad = value == t('app.view_bad')
@@ -560,6 +661,7 @@ class App(ctk.CTk):
         ids = [str(i) for i, c in enumerate(self.clips) if self._auto(c) and self.tree.exists(str(i))]
         self.tree.selection_set(ids)
         self._update_actions()
+        self._show_details()
 
     # ------------------------------------------------------------ ações
     def _start_scan(self, label, fn):

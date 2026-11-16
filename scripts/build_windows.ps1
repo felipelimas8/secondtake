@@ -31,7 +31,7 @@ VSVersionInfo(
 
 python -m PyInstaller --windowed --noconfirm --clean `
   --name "Second Take" --paths src --collect-submodules secondtake `
-  --collect-data customtkinter --collect-data secondtake `
+  --collect-data customtkinter --collect-data secondtake --collect-all tkinterdnd2 `
   --icon assets\icon.ico --version-file build\version_info.txt `
   scripts\secondtake_app.py
 
