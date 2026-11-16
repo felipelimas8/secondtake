@@ -3,7 +3,7 @@
 **Recuperação de clipes de câmera corrompidos — dá uma segunda chance ao take.**
 *Recovery for corrupted camera clips — [English below](#english).*
 
-O Second Take diagnostica e recupera arquivos de vídeo **Sony XAVC S** (FX3, FX3A, FX30 e similares) danificados por cartão retirado durante a gravação, bateria que acabou, cópia incompleta ou setores ruins. Ele preserva **vídeo, áudio LPCM e metadados** e **nunca altera os arquivos originais**: tudo é gravado como cópia numa pasta de saída.
+O Second Take (macOS e Windows) diagnostica e recupera arquivos de vídeo **Sony XAVC S** (FX3, FX3A, FX30 e similares) danificados por cartão retirado durante a gravação, bateria que acabou, cópia incompleta ou setores ruins. Ele preserva **vídeo, áudio LPCM e metadados** e **nunca altera os arquivos originais**: tudo é gravado como cópia numa pasta de saída.
 
 Desenvolvido pela [Super8 Produtora](https://instagram.com/super8produtora) a partir de um caso real de set, e distribuído como software livre (GPL v3).
 
@@ -34,6 +34,8 @@ O app ainda não é notarizado pela Apple, então na primeira abertura o macOS a
 - **Terminal:** `xattr -cr "/Applications/Second Take.app"`
 
 Isso só é necessário uma vez. Quando sair uma versão nova, o próprio app avisa (no máximo uma vez por dia, desligável em Ajustes) e o botão **Baixar** abre o instalador novo. Para mandar a um colega, use **Sobre o Second Take > Como instalar em outro Mac**: o app copia o link e as instruções prontos para colar.
+
+**Windows 10/11 (64 bits):** baixe o `SecondTake-…-Windows-x64-Setup.exe` em [Releases](../../releases/latest) e siga o instalador (não precisa de senha de administrador). Se preferir não instalar, use o `.zip` portátil: descompacte e abra `Second Take.exe`. Como o app ainda não tem certificado de assinatura, o Windows pode mostrar *"O Windows protegeu o computador"*: clique em **Mais informações > Executar assim mesmo**. Para a verificação dos reparos, instale o ffmpeg com `winget install Gyan.FFmpeg` (opcional).
 
 **Pelo código:**
 ```bash
@@ -82,7 +84,7 @@ A suíte de testes **não usa material de câmera**. O `tests/synth.py` gera cli
 
 Cada push na `main` gera automaticamente o instalador e publica na pré-release [Última versão (main)](../../releases/tag/main-build). As versões oficiais saem pelas tags `v*`.
 
-Para gerar o app e o instalador no macOS: `brew install create-dmg` e depois `scripts/build_macos.sh` (o `.app`, o `.dmg` e o `.zip` saem em `dist/`). O ícone e o fundo do instalador são gerados por `scripts/make_assets.py`.
+Para gerar o app e o instalador no macOS: `brew install create-dmg` e depois `scripts/build_macos.sh` (o `.app`, o `.dmg` e o `.zip` saem em `dist/`). O ícone e o fundo do instalador são gerados por `scripts/make_assets.py`. No Windows, com [Inno Setup 6](https://jrsoftware.org/isinfo.php) instalado: `.\scripts\build_windows.ps1` (gera o `Setup.exe` e o `.zip` portátil em `dist\`).
 
 ## Licença
 
@@ -92,7 +94,7 @@ Copyright © 2026 Super8 Produtora. Distribuído sob a **GNU General Public Lice
 
 ## English
 
-**Second Take** diagnoses and recovers corrupted **Sony XAVC S** clips (FX3, FX3A, FX30 and similar) damaged by a card pulled mid-recording, a dead battery, an incomplete copy or bad sectors. It preserves **video, LPCM audio and metadata**, and **never modifies the originals**: everything is written as a copy to an output folder.
+**Second Take** (macOS and Windows) diagnoses and recovers corrupted **Sony XAVC S** clips (FX3, FX3A, FX30 and similar) damaged by a card pulled mid-recording, a dead battery, an incomplete copy or bad sectors. It preserves **video, LPCM audio and metadata**, and **never modifies the originals**: everything is written as a copy to an output folder.
 
 | Level | Damage | What it does |
 |---|---|---|

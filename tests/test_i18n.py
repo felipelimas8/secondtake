@@ -25,7 +25,7 @@ def test_every_key_used_in_code_exists():
     src = pathlib.Path(core.__file__).parent
     used = set()
     for f in src.glob('*.py'):
-        used |= set(re.findall(r"""(?:\bt|\bL|\btr)\(\s*['"]([a-z]+\.[a-z_A-Z]+)['"]""", f.read_text()))
+        used |= set(re.findall(r"""(?:\bt|\bL|\btr)\(\s*['"]([a-z]+\.[a-z_A-Z]+)['"]""", f.read_text(encoding='utf-8')))
     missing = sorted(k for k in used if k not in CATALOG)
     assert not missing, missing
     for st in (core.OK, core.HEADER, core.NO_MOOV, core.EMPTY, core.UNKNOWN):

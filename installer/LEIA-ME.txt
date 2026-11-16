@@ -1,0 +1,22 @@
+SECOND TAKE para Windows
+========================
+
+Recuperação de clipes de câmera corrompidos (Sony XAVC S).
+Os originais nunca são alterados: tudo sai como cópia na pasta de saída.
+
+VERSÃO PORTÁTIL (.zip)
+  Descompacte a pasta inteira e abra "Second Take.exe".
+  Não apague os outros arquivos da pasta: o app precisa deles.
+
+AVISO DO WINDOWS
+  Na primeira vez, o Windows pode mostrar "O Windows protegeu o computador"
+  (SmartScreen), porque o app ainda não tem certificado de assinatura.
+  Clique em "Mais informações" e depois em "Executar assim mesmo".
+
+VERIFICAÇÃO DOS REPAROS (opcional)
+  Para o app conferir os arquivos reparados quadro a quadro, instale o ffmpeg:
+      winget install Gyan.FFmpeg
+  Sem ele, o reparo funciona normalmente, só sem essa conferência.
+
+Código aberto (GPL v3): https://github.com/felipelimas8/secondtake
+Copyright (C) 2026 Super8 Produtora

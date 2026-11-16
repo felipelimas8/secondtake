@@ -62,6 +62,29 @@ def app_icon(size: int):
         return None
 
 
+def install_help() -> str:
+    key = 'install.help_win' if sys.platform == 'win32' else 'install.help'
+    return t(key, url=RELEASES_URL)
+
+
+def install_label() -> str:
+    return t('about.install_win' if sys.platform == 'win32' else 'about.install')
+
+
+def open_folder(path: str):
+    if sys.platform == 'win32':
+        os.startfile(path)  # type: ignore[attr-defined]
+    elif sys.platform == 'darwin':
+        subprocess.run(['open', path])
+    else:
+        subprocess.run(['xdg-open', path])
+
+
+def free_space(path: str) -> float:
+    import shutil
+    return shutil.disk_usage(path).free
+
+
 def human(n):
     for u in ('B', 'KB', 'MB', 'GB', 'TB'):
         if n < 1024:
@@ -126,6 +149,16 @@ class App(ctk.CTk):
         self._install_menu()
         self.after(100, self._poll)
         self.after(2500, lambda: self.check_updates(manual=False))
+        if sys.platform == 'win32':
+            self.after(300, self._win_icon)
+
+    def _win_icon(self):
+        try:
+            from importlib import resources
+            with resources.as_file(resources.files(__package__).joinpath('icon.ico')) as p:
+                self.iconbitmap(str(p))
+        except Exception:
+            pass
 
     # ------------------------------------------------------------ idioma
     def set_language(self, pref: str):
@@ -364,6 +397,13 @@ class App(ctk.CTk):
             self.createcommand('tkAboutDialog', self.about)
             self.createcommand('tk::mac::ShowPreferences', self.preferences)
             self.createcommand('::tk::mac::ShowHelp', lambda: webbrowser.open(REPO_URL))
+        else:
+            file_menu = tk.Menu(bar, tearoff=0)
+            file_menu.add_command(label=t('menu.prefs'), accelerator='Ctrl+,', command=self.preferences)
+            file_menu.add_separator()
+            file_menu.add_command(label=t('menu.quit'), command=self.destroy)
+            bar.add_cascade(label=t('menu.file'), menu=file_menu)
+            self.bind_all('<Control-comma>', lambda e: self.preferences())
         lang_menu = tk.Menu(bar, tearoff=0)
         lang_menu.add_radiobutton(label=t('prefs.auto'), value='auto', variable=self._lang_var,
                                   command=lambda: self.set_language('auto'))
@@ -377,7 +417,7 @@ class App(ctk.CTk):
             help_menu.add_command(label=t('about.title'), command=self.about)
         help_menu.add_command(label=t('about.help_page'), command=lambda: webbrowser.open(REPO_URL))
         help_menu.add_command(label=t('about.issue'), command=lambda: webbrowser.open(ISSUES_URL))
-        help_menu.add_command(label=t('about.install'), command=self._copy_install_help)
+        help_menu.add_command(label=install_label(), command=self._copy_install_help)
         if sys.platform != 'darwin':
             help_menu.add_separator()
             help_menu.add_command(label=t('upd.menu'), command=lambda: self.check_updates(manual=True))
@@ -386,7 +426,7 @@ class App(ctk.CTk):
 
     def _copy_install_help(self):
         self.clipboard_clear()
-        self.clipboard_append(t('install.help', url=RELEASES_URL))
+        self.clipboard_append(install_help())
         messagebox.showinfo('Second Take', t('about.copied'))
 
     def preferences(self):
@@ -415,7 +455,7 @@ class App(ctk.CTk):
     def _update_download(self):
         info = self.update_info
         if info:
-            webbrowser.open(info.get('dmg') or info['page'])
+            webbrowser.open(info.get('download') or info['page'])
         self._update_later()
 
     def _update_later(self):
@@ -439,7 +479,7 @@ class App(ctk.CTk):
     def _open_out(self):
         d = self.dst.get()
         os.makedirs(d, exist_ok=True)
-        subprocess.run(['open', d] if sys.platform == 'darwin' else ['xdg-open', d])
+        open_folder(d)
 
     def _selected(self):
         return [self.clips[int(i)] for i in self.tree.selection()]
@@ -568,8 +608,7 @@ class App(ctk.CTk):
         total = sum(c.size for c in todo)
         try:
             os.makedirs(out, exist_ok=True)
-            st_ = os.statvfs(out) if hasattr(os, 'statvfs') else None
-            free = st_.f_bavail * st_.f_frsize if st_ else float('inf')
+            free = free_space(out)
         except OSError as e:
             messagebox.showerror('Second Take', t('app.cant_write', path=out, err=e))
             return
@@ -762,7 +801,8 @@ class AboutDialog(_Dialog):
             (t('about.originals'), t('about.originals_v')),
             ('ffprobe', ff if ff else t('about.ffprobe_missing')),
             (t('about.system'), f'macOS {platform.mac_ver()[0]} · {platform.machine()}' if sys.platform == 'darwin'
-             else f'{platform.system()} {platform.release()}'),
+             else f'Windows {platform.release()} ({platform.version()}) · {platform.machine()}'
+             if sys.platform == 'win32' else f'{platform.system()} {platform.release()}'),
             ('Python', f'{platform.python_version()} · Tk {self.tk.call("info", "patchlevel")} · '
                        f'CustomTkinter {ctk.__version__}'),
         ]
@@ -790,7 +830,7 @@ class AboutDialog(_Dialog):
                           command=lambda u=url: webbrowser.open(u)).pack(side='left', padx=4)
         b = ctk.CTkFrame(f, fg_color='transparent')
         b.pack(pady=(14, 0))
-        ctk.CTkButton(b, text=t('about.install'), height=32, font=(FONT, 12), command=self._install_help,
+        ctk.CTkButton(b, text=install_label(), height=32, font=(FONT, 12), command=self._install_help,
                       **secondary()).pack(side='left', padx=4)
         ctk.CTkButton(b, text=t('about.copy'), height=32, font=(FONT, 12), command=self._copy,
                       **secondary()).pack(side='left', padx=4)
@@ -800,7 +840,7 @@ class AboutDialog(_Dialog):
     def _install_help(self):
         """Copia as instruções de instalação para mandar a um colega."""
         self.clipboard_clear()
-        self.clipboard_append(t('install.help', url=RELEASES_URL))
+        self.clipboard_append(install_help())
         messagebox.showinfo('Second Take', t('about.copied'), parent=self)
 
     def _copy(self):

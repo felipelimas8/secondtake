@@ -15,6 +15,7 @@ keywords = ["video", "recovery", "xavc", "sony", "mp4", "repair", "dit"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
   "Topic :: Multimedia :: Video",
   "Environment :: MacOS X",
 ]
@@ -37,7 +38,7 @@ version = { attr = "secondtake.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-secondtake = ["icon.png"]
+secondtake = ["icon.png", "icon.ico"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

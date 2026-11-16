@@ -214,8 +214,8 @@ CATALOG: dict[str, tuple[str, str]] = {
     'upd.failed': ('Não foi possível verificar atualizações agora.\n{err}',
                    "Couldn't check for updates right now.\n{err}"),
     'upd.checking': ('Verificando atualizações…', 'Checking for updates…'),
-    'prefs.lang_hint': ('No modo automático, o Second Take segue o idioma do macOS. Escolhendo um idioma, ele fica fixo.',
-                        'In automatic mode, Second Take follows the macOS language. Picking a language locks it.'),
+    'prefs.lang_hint': ('No modo automático, o Second Take segue o idioma do sistema. Escolhendo um idioma, ele fica fixo.',
+                        'In automatic mode, Second Take follows the system language. Picking a language locks it.'),
 
     # ---- Sobre
     'about.title': ('Sobre o Second Take', 'About Second Take'),
@@ -240,6 +240,10 @@ CATALOG: dict[str, tuple[str, str]] = {
     'about.issue': ('Relatar problema', 'Report a problem'),
     'about.license': ('Licença', 'License'),
     'about.install': ('Como instalar em outro Mac', 'How to install on another Mac'),
+    'about.install_win': ('Como instalar em outro PC', 'How to install on another PC'),
+    'menu.file': ('Arquivo', 'File'),
+    'menu.prefs': ('Ajustes…', 'Settings…'),
+    'menu.quit': ('Sair', 'Exit'),
     'about.copy': ('Copiar informações', 'Copy info'),
     'about.close': ('Fechar', 'Close'),
     'about.copied': ('Instruções copiadas. Cole na mensagem para o colega junto com o link do instalador.',
@@ -261,6 +265,22 @@ CATALOG: dict[str, tuple[str, str]] = {
         '3. System Settings > Privacy & Security > scroll to the bottom > Open Anyway.\n'
         'That\'s it, you only need to do this once.\n'
         '(Or in Terminal: xattr -cr "/Applications/Second Take.app")'),
+
+    'install.help_win': (
+        'Second Take — recuperação de clipes de câmera corrompidos\n'
+        'Baixe o instalador (SecondTake-…-Windows-x64-Setup.exe): {url}\n\n'
+        '1. Abra o instalador. O Windows pode mostrar "O Windows protegeu o computador":\n'
+        '   clique em "Mais informações" e depois em "Executar assim mesmo".\n'
+        '2. Siga o instalador (não precisa de senha de administrador).\n'
+        '3. Abra o Second Take pelo menu Iniciar.\n'
+        '(Prefere sem instalar? Baixe o .zip portátil, descompacte e abra "Second Take.exe".)',
+        'Second Take — recovery for corrupted camera clips\n'
+        'Download the installer (SecondTake-…-Windows-x64-Setup.exe): {url}\n\n'
+        '1. Open the installer. Windows may show "Windows protected your PC":\n'
+        '   click "More info" and then "Run anyway".\n'
+        '2. Follow the installer (no administrator password needed).\n'
+        '3. Open Second Take from the Start menu.\n'
+        '(Rather not install? Download the portable .zip, unzip it and open "Second Take.exe".)'),
 
     # ---- Avançado
     'adv.title': ('Avançado — {name}', 'Advanced — {name}'),
@@ -415,9 +435,16 @@ def system_lang() -> str:
                 return 'pt' if first.lower().startswith('pt') else 'en'
         except Exception:
             pass
+    if sys.platform == 'win32':
+        try:
+            import ctypes
+            langid = ctypes.windll.kernel32.GetUserDefaultUILanguage()
+            return 'pt' if (langid & 0x3FF) == 0x16 else 'en'   # 0x16 = LANG_PORTUGUESE
+        except Exception:
+            pass
     for v in (os.environ.get('LC_ALL'), os.environ.get('LANG'), (locale.getlocale()[0] or '')):
         if v:
-            return 'pt' if v.lower().startswith('pt') else 'en'
+            return 'pt' if v.lower().startswith(('pt', 'portuguese')) else 'en'
     return 'pt'
 
 

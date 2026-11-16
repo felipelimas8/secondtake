@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.8.0 — 2026-11-16
+- **Windows**: instalador `SecondTake-…-Windows-x64-Setup.exe` (Inno Setup, em português e inglês, instala só para o usuário, sem senha de administrador, com atalho no menu Iniciar e desinstalador) e versão portátil `.zip`.
+- No Windows: menu **Arquivo** com Ajustes (Ctrl+,) e Sair; ícone próprio na janela e no executável; ffmpeg encontrado também em winget, Chocolatey, Scoop e `C:\ffmpeg`; sem janelas de console piscando ao verificar; idioma do Windows detectado.
+- A verificação de atualizações baixa o instalador certo para cada sistema (`.dmg` no Mac, `Setup.exe` no Windows).
+- "Como instalar em outro PC" com as instruções do SmartScreen.
+- GitHub Actions gera e publica os arquivos do Windows junto com os do Mac, nas releases oficiais e na prévia "Última versão (main)".
+
 ## 0.7.1 — 2026-11-16
 - Atualizações: quando não há versão oficial visível (repositório privado ou só pré-releases), o app considera que está atualizado em vez de mostrar "HTTP Error 404".
 - CI: testes completos só em Linux; o macOS roda testes + build do `.dmg` uma vez por push (fila menor).

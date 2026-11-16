@@ -64,3 +64,12 @@ def test_github_404_means_no_release(monkeypatch):
     monkeypatch.setattr(urllib.request, 'urlopen', fake_urlopen)
     assert updater.fetch_latest() is None
     assert updater.check(force=True) is None
+
+
+def test_picks_installer_for_each_platform():
+    names = ['SecondTake-0.8.0-macOS-arm64.dmg', 'SecondTake-0.8.0-macOS-arm64.zip',
+             'SecondTake-0.8.0-Windows-x64-Setup.exe', 'SecondTake-0.8.0-Windows-x64-portatil.zip']
+    assert updater.pick_asset(names, platform='darwin').endswith('.dmg')
+    assert updater.pick_asset(names, platform='win32').endswith('Setup.exe')
+    assert updater.pick_asset(names, platform='linux') is None
+    assert updater.pick_asset(names[:2], platform='win32') is None     # release sem Windows: abre a página

@@ -661,18 +661,19 @@ def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
 
 
 def _ffmpeg():
-    import shutil
-    return next((p for p in (shutil.which('ffmpeg'), '/opt/homebrew/bin/ffmpeg', '/usr/local/bin/ffmpeg')
-                 if p and os.path.exists(p)), None)
+    from .core import ffmpeg_bin
+    return ffmpeg_bin('ffmpeg')
 
 
 def _ffmpeg_copy(src: str, dst: str) -> bool:
-    import subprocess
+    import sys
     ff = _ffmpeg()
     if not ff:
         return False
+    import subprocess
+    kw = {'creationflags': 0x08000000} if sys.platform == 'win32' else {}  # sem janela de console
     r = subprocess.run([ff, '-v', 'error', '-y', '-i', src, '-map', '0:v:0', '-map', '0:a?',
-                        '-c', 'copy', dst], capture_output=True)
+                        '-c', 'copy', dst], capture_output=True, **kw)
     return r.returncode == 0
 
 

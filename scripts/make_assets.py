@@ -82,6 +82,10 @@ def icon():
     # cópia pequena empacotada com o app (cabeçalho e janela Sobre)
     pkg = os.path.join(HERE, '..', 'src', 'secondtake', 'icon.png')
     out.resize((256, 256), Image.LANCZOS).save(pkg)
+    # Windows: .ico com vários tamanhos (app, atalhos, instalador e ícone da janela)
+    ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
+    out.save(os.path.join(OUT, 'icon.ico'), sizes=ico_sizes)
+    out.save(os.path.join(HERE, '..', 'src', 'secondtake', 'icon.ico'), sizes=ico_sizes)
     return out
 
 

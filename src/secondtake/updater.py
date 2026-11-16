@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 import ssl
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -42,7 +43,7 @@ def _ssl_context():
 
 
 def fetch_latest(timeout: float = 6.0) -> dict | None:
-    """Última versão oficial: {'version', 'page', 'dmg', 'notes'}.
+    """Última versão oficial: {'version', 'page', 'download', 'notes'}.
 
     Retorna None quando ainda não há nenhuma release oficial publicada (o GitHub
     responde 404 se só existem pré-releases/rascunhos, ou se o repositório é privado).
@@ -60,14 +61,28 @@ def fetch_latest(timeout: float = 6.0) -> dict | None:
             return None
         raise
     tag = data.get('tag_name', '')
-    dmg = next((a.get('browser_download_url') for a in data.get('assets', [])
-                if a.get('name', '').lower().endswith('.dmg')), None)
     return {
         'version': tag.lstrip('vV'),
         'page': data.get('html_url') or PAGE_LATEST,
-        'dmg': dmg,
+        'download': pick_asset([a.get('name', '') for a in data.get('assets', [])],
+                               {a.get('name', ''): a.get('browser_download_url') for a in data.get('assets', [])}),
         'notes': (data.get('body') or '').strip(),
     }
+
+
+def pick_asset(names: list[str], urls: dict | None = None, platform: str | None = None):
+    """Escolhe o instalador certo para o sistema: .dmg no macOS, -Setup.exe no Windows."""
+    platform = platform or sys.platform
+    if platform == 'darwin':
+        want = lambda n: n.lower().endswith('.dmg')  # noqa: E731
+    elif platform == 'win32':
+        want = lambda n: n.lower().endswith('setup.exe')  # noqa: E731
+    else:
+        return None
+    name = next((n for n in names if want(n)), None)
+    if name is None:
+        return None
+    return (urls or {}).get(name, name)
 
 
 def check(force: bool = False, fetch=fetch_latest) -> dict | None:

@@ -445,8 +445,29 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
     return dst
 
 
+def run_quiet(cmd: list[str], **kw):
+    """subprocess.run sem abrir janela de console no Windows."""
+    if sys.platform == 'win32':
+        kw.setdefault('creationflags', 0x08000000)  # CREATE_NO_WINDOW
+    return subprocess.run(cmd, **kw)
+
+
 def ffmpeg_bin(name='ffmpeg'):
-    for p in (shutil.which(name), f'/opt/homebrew/bin/{name}', f'/usr/local/bin/{name}'):
+    """Caminho do ffmpeg/ffprobe: PATH e os locais de instalação mais comuns (macOS e Windows)."""
+    cands = [shutil.which(name)]
+    if sys.platform == 'win32':
+        exe = name + '.exe'
+        local = os.environ.get('LOCALAPPDATA', '')
+        cands += [os.path.join(p, exe) for p in (
+            r'C:\ffmpeg\bin',
+            os.path.join(os.environ.get('ProgramFiles', r'C:\Program Files'), 'ffmpeg', 'bin'),
+            r'C:\ProgramData\chocolatey\bin',
+            os.path.join(local, 'Microsoft', 'WinGet', 'Links'),
+            os.path.join(os.path.expanduser('~'), 'scoop', 'shims'),
+        )]
+    else:
+        cands += [f'/opt/homebrew/bin/{name}', f'/usr/local/bin/{name}', f'/usr/bin/{name}']
+    for p in cands:
         if p and os.path.exists(p):
             return p
     return None
@@ -463,7 +484,7 @@ def verify(c: Clip) -> str:
     if not fp:
         c.verify = L('verify.no_ffprobe')
         return c.verify
-    r = subprocess.run([fp, '-v', 'error', '-count_frames', '-select_streams', 'v:0',
+    r = run_quiet([fp, '-v', 'error', '-count_frames', '-select_streams', 'v:0',
                         '-show_entries', 'stream=nb_frames,nb_read_frames', '-of', 'csv=p=0',
                         c.output], capture_output=True, text=True)
     try:
