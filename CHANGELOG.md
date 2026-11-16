@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.5.0 — 2026-11-16
+- **Interface nova** em CustomTkinter, que segue o modo claro/escuro do macOS:
+  - cabeçalho com origem;
+  - cartões de resumo (analisados, íntegros, reparáveis, último recurso);
+  - filtro "Problemas/Todos" e busca por nome;
+  - tabela com status e ação;
+  - estado vazio com as duas formas de começar;
+  - rodapé com saída, progresso e uma única ação principal ("Reparar N clipes").
+- Linhas íntegras ficam discretas; o que precisa de atenção se destaca.
+- A extração bruta não entra mais na seleção automática: é último recurso, escolhido pelo usuário.
+- Verificação de espaço livre na saída antes de reparar.
+- Duplo clique numa linha abre o Avançado.
+- Janelas Sobre e Avançado redesenhadas.
+
+## 0.4.1 — 2026-11-16
+- Janela **Sobre** própria: o que o app faz, formatos suportados, autoria, licença, links do projeto e estado do ffprobe; botão para copiar as informações para uma *issue*.
+- Copyright e categoria do app registrados no Info.plist (aparecem em "Obter Informações" no Finder).
+- README: instrução do Gatekeeper para versões recentes do macOS.
+- `build_macos.sh` compatível com o bash 3.2 do macOS.
+
 ## 0.4.0 — 2026-11-16
 Primeira versão pública (antes chamada "XAVC Rescue").
 - **Nível 1:** reparo de cabeçalho com `moov` íntegro; reconstrução do `moov` de gravações interrompidas a partir de um clipe de referência.

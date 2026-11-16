@@ -16,9 +16,9 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Operating System :: MacOS",
   "Topic :: Multimedia :: Video",
-  "Environment :: X11 Applications :: Tk",
+  "Environment :: MacOS X",
 ]
-dependencies = []
+dependencies = ["customtkinter>=5.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=7"]

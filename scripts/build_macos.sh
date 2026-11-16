@@ -17,11 +17,17 @@ ICON=()
 
 python3 -m PyInstaller --windowed --noconfirm --clean \
   --name "Second Take" --paths src --collect-submodules secondtake \
+  --collect-data customtkinter \
   --osx-bundle-identifier br.com.super8.secondtake \
   ${ICON[@]+"${ICON[@]}"} scripts/secondtake_app.py
 
 APP="dist/Second Take.app"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist" || true
+PLIST="$APP/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST" || true
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST" || true
+/usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string 'Copyright © 2026 Super8 Produtora · GPL v3'" "$PLIST" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Set :NSHumanReadableCopyright 'Copyright © 2026 Super8 Produtora · GPL v3'" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :LSApplicationCategoryType string public.app-category.video" "$PLIST" 2>/dev/null || true
 xattr -cr "$APP"
 codesign -s - --force --deep "$APP"
 (cd dist && ditto -c -k --keepParent "Second Take.app" "SecondTake-$VERSION-macOS-$(uname -m).zip")
