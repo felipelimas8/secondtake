@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.7.1 — 2026-11-16
+- Atualizações: quando não há versão oficial visível (repositório privado ou só pré-releases), o app considera que está atualizado em vez de mostrar "HTTP Error 404".
+- CI: testes completos só em Linux; o macOS roda testes + build do `.dmg` uma vez por push (fila menor).
+
 ## 0.7.0 — 2026-11-16
 - **Verificação de atualizações**: ao abrir (no máximo uma vez por dia) o app consulta a última versão oficial no GitHub e, se houver uma nova, mostra uma faixa com **Baixar** (abre o `.dmg` novo), **Agora não** e **Pular esta versão**.
 - **Second Take > Verificar atualizações…** para checar na hora.
