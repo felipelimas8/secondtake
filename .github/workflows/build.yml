@@ -29,6 +29,7 @@ jobs:
       - run: brew install ffmpeg create-dmg
       - run: python -m pip install -e ".[dev]" && python -m pytest -q
       - run: scripts/build_macos.sh
+      - run: python scripts/make_samples.py dist
       - uses: actions/upload-artifact@v4
         with:
           name: SecondTake-dmg-${{ github.sha }}

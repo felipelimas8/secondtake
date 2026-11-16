@@ -50,6 +50,8 @@ Requisitos: Python 3.10+ com Tkinter (o instalador do python.org já inclui). O 
 
 ## Uso
 
+Para experimentar sem material real, baixe `SecondTake-amostras-teste.zip` na página da release: são 5 clipes sintéticos, cada um com um tipo de dano, e um LEIA-ME dizendo o que esperar.
+
 ### Interface
 1. **Analisar**: escolhe uma pasta de brutas e examina todos os clipes. **Analisar arquivos…** examina só os clipes escolhidos e busca referências na mesma pasta.
 2. Os arquivos reparáveis já vêm selecionados. Clique em **Reparar selecionados**.

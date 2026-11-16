@@ -3,6 +3,7 @@
 ## 0.9.0 — 2026-11-16
 - **Arrastar e soltar**: solte clipes ou uma pasta em qualquer lugar da janela para analisar. A área da lista se destaca ao arrastar. Mac e Windows.
 - **Detalhes do clipe**: painel lateral com câmera, número de série, data, timecode, resolução, codec (perfil, nível, 4:2:2/4:2:0, 8/10-bit), formato XAVC, quadros/s (e de captura, em S&Q), duração, bitrate do vídeo, perfil de cor (S-Log3/S-Gamut3.Cine) e áudio. Também no relatório CSV. Lidos do índice do arquivo e do XML da Sony; funciona até em clipes danificados.
+- **Clipes de teste**: cada release traz `SecondTake-amostras-teste.zip`, com 5 clipes sintéticos (íntegro, cabeçalho danificado, sem índice, trecho danificado e lixo) para experimentar o app sem material real. Gerados por `scripts/make_samples.py`.
 - Instalador do Mac com um só "Leia-me · Read me.txt" bilíngue.
 
 ## 0.8.0 — 2026-11-16
