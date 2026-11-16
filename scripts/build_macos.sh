@@ -54,7 +54,7 @@ rm -f "$DMG"
 STAGE=build/dmg
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
-cp "assets/Como abrir.txt" "assets/How to open.txt" "$STAGE/"
+cp "assets/Leia-me · Read me.txt" "$STAGE/"
 if command -v create-dmg >/dev/null 2>&1; then
   BG=assets/dmg_background.png
   if [ -f assets/dmg_background@2x.png ]; then
@@ -71,7 +71,7 @@ if command -v create-dmg >/dev/null 2>&1; then
       --icon-size 104 --text-size 13 \
       --icon "Second Take.app" 170 200 --hide-extension "Second Take.app" \
       --app-drop-link 510 200 \
-      --icon "Como abrir.txt" 560 52 --icon "How to open.txt" 630 52 \
+      --icon "Leia-me · Read me.txt" 600 52 \
       --no-internet-enable "$@" \
       "$DMG" "$STAGE" >/dev/null
   }
