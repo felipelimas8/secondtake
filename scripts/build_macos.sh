@@ -54,7 +54,7 @@ rm -f "$DMG"
 STAGE=build/dmg
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
-cp "assets/Como abrir.txt" "$STAGE/"
+cp "assets/Como abrir.txt" "assets/How to open.txt" "$STAGE/"
 if command -v create-dmg >/dev/null 2>&1; then
   BG=assets/dmg_background.png
   if [ -f assets/dmg_background@2x.png ]; then
@@ -67,11 +67,11 @@ if command -v create-dmg >/dev/null 2>&1; then
     create-dmg \
       --volname "Second Take $VERSION" ${VOLICON[@]+"${VOLICON[@]}"} \
       --background "$BG" \
-      --window-pos 200 120 --window-size 680 500 \
+      --window-pos 200 120 --window-size 680 520 \
       --icon-size 104 --text-size 13 \
       --icon "Second Take.app" 170 200 --hide-extension "Second Take.app" \
       --app-drop-link 510 200 \
-      --icon "Como abrir.txt" 600 52 \
+      --icon "Como abrir.txt" 560 52 --icon "How to open.txt" 630 52 \
       --no-internet-enable "$@" \
       "$DMG" "$STAGE" >/dev/null
   }

@@ -17,6 +17,8 @@ Desenvolvido pela [Super8 Produtora](https://instagram.com/super8produtora) a pa
 | 3 | Casos difíceis | Modo **Avançado**: escolha manual da referência, offset dos dados e simulação antes de gravar | — |
 | 4 | Nada remonta | Extração bruta: vídeo `.h264`, áudio `.wav` e um MP4 limpo | `_EXTRAIDO` |
 
+O app funciona em **português e inglês**: segue o idioma do macOS, e o menu **Idioma** (ou **Ajustes…**, ⌘,) troca na hora. No terminal, use `--lang en`.
+
 O app escolhe o nível automaticamente para cada arquivo e gera um `relatorio_reparo.csv` com diagnóstico, referência usada, pico de áudio e verificação. Ele avisa, por exemplo, quando o áudio já foi gravado em silêncio, que é um problema do set e não do arquivo.
 
 ### Como funciona
@@ -78,6 +80,8 @@ A suíte de testes **não usa material de câmera**. O `tests/synth.py` gera cli
 
 **Nunca envie material de clientes para o repositório**, nem em *issues*. Veja o [CONTRIBUTING.md](CONTRIBUTING.md).
 
+Cada push na `main` gera automaticamente o instalador e publica na pré-release [Última versão (main)](../../releases/tag/main-build). As versões oficiais saem pelas tags `v*`.
+
 Para gerar o app e o instalador no macOS: `brew install create-dmg` e depois `scripts/build_macos.sh` (o `.app`, o `.dmg` e o `.zip` saem em `dist/`). O ícone e o fundo do instalador são gerados por `scripts/make_assets.py`.
 
 ## Licença
@@ -108,4 +112,4 @@ secondtake-gui
 
 The app is not notarized yet: on first launch click **Done**, then go to *System Settings > Privacy & Security > Open Anyway* (or run `xattr -cr "/Applications/Second Take.app"`).
 
-Licensed under GPL-3.0-or-later. The UI and messages are in Portuguese for now, and translations are welcome.
+Licensed under GPL-3.0-or-later. The app, the diagnoses, the CSV report and the CLI are available in **English and Portuguese**: it follows the macOS language, and you can switch it from the **Language** menu or **Settings…** (⌘,) (`--lang en` on the command line).

@@ -1,0 +1,23 @@
+SECOND TAKE — opening it for the first time
+============================================
+
+1. Drag "Second Take" to the Applications folder.
+
+2. Open the app. Because it is not notarized by Apple yet, macOS shows
+   a warning saying it could not verify the app.
+   Close the warning. Do NOT click "Move to Trash".
+
+3. Open System Settings > Privacy & Security, scroll to the bottom
+   and click "Open Anyway". Confirm with your password or Touch ID.
+
+4. Open Second Take again. From now on it opens normally with a
+   double-click.
+
+Alternative in Terminal (does the same as step 3):
+
+    xattr -cr "/Applications/Second Take.app"
+
+----------------------------------------------------------------------
+Why? Second Take is free software made by Super8 Produtora (Brazil)
+and has not gone through Apple's paid notarization yet.
+The source code is open at https://github.com/felipelimas8/secondtake

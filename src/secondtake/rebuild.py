@@ -18,6 +18,8 @@ import os
 import struct
 from dataclasses import dataclass
 
+from .i18n import L, msg
+
 CONTAINERS = {b'moov', b'trak', b'edts', b'mdia', b'minf', b'stbl', b'dinf'}
 
 
@@ -135,7 +137,7 @@ def load_profile(ref_path: str, find_moov) -> Profile:
         traks[h] = t
     v, a, m = traks.get(b'vide'), traks.get(b'soun'), traks.get(b'meta')
     if v is None or a is None:
-        raise ValueError('referência sem trilhas de vídeo e áudio')
+        raise ValueError(L('err.ref_tracks'))
     vst = v.find(b'mdia', b'minf', b'stbl')
     ast = a.find(b'mdia', b'minf', b'stbl')
     G = _table(vst.find(b'stsc'), 3)[0][1]
@@ -168,7 +170,7 @@ def load_profile(ref_path: str, find_moov) -> Profile:
     with open(ref_path, 'rb') as f:
         header = f.read(data_start)
     if header[data_start - 12:data_start - 8] != b'mdat' and header[data_start - 4:data_start] != b'mdat':
-        raise ValueError('cabeçalho da referência fora do padrão XAVC S')
+        raise ValueError(L('err.ref_layout'))
     mvhd = moov.find(b'mvhd').data
     m_ts = struct.unpack('>I', mvhd[20:24] if mvhd[0] == 1 else mvhd[12:16])[0]
     return Profile(ref_path, header, data_start, moov, G, meta_size,
@@ -236,7 +238,7 @@ def scan_chunks(path: str, prof: Profile, data_start: int | None = None,
     pos = prof.data_start if data_start is None else data_start
     chunks: list[Chunk] = []
     gaps: list[tuple[int, int]] = []
-    reason = 'fim do arquivo'
+    reason = L('reason.eof')
     need_idr = True          # após o início ou um trecho pulado, só aceita bloco que começa em IDR
     gap_start = None
     with open(path, 'rb') as f:
@@ -244,24 +246,24 @@ def scan_chunks(path: str, prof: Profile, data_start: int | None = None,
             meta_off = pos
             video_off = meta_off + prof.G * prof.meta_size
             if video_off >= size or _is_tail(f, meta_off, size):
-                reason = 'fim da gravação'
+                reason = L('reason.end')
                 break
             try:
                 sizes, end, keys = _read_last_aware(f, video_off, prof, size)
                 if end + prof.audio_chunk > size:
-                    raise ScanError('último bloco de áudio incompleto')
+                    raise ScanError(L('reason.audio_incomplete'))
             except ScanError as e:
                 tail = size - meta_off
                 big = prof.G * prof.meta_size + prof.audio_chunk + 64 * (1 << 20)
                 if tail < big and not resync:
-                    reason = 'gravação cortada no último bloco'
+                    reason = L('reason.cut')
                     break
                 if not resync:
-                    reason = str(e)
+                    reason = msg(e)
                     break
                 found = _resync(f, meta_off + 1, prof, size)
                 if found is None:
-                    reason = 'gravação cortada no último bloco' if tail < big else f'sem blocos íntegros após {meta_off}'
+                    reason = L('reason.cut') if tail < big else L('reason.no_good_after', pos=meta_off)
                     break
                 if gap_start is None:
                     gap_start = meta_off
@@ -308,7 +310,7 @@ def _read_last_aware(f, video_off: int, prof: Profile, size: int):
     depois do áudio do bloco, os metadados e o AUD do bloco seguinte batem
     (ou quando o áudio termina exatamente no fim do arquivo)."""
     if not _is_aud(f, video_off):
-        raise ScanError(f'vídeo não começa com AUD em {video_off}')
+        raise ScanError(L('reason.no_aud', pos=video_off))
     sizes, p, start, seen, keys = [], video_off, video_off, 0, []
     skip = prof.audio_chunk + prof.G * prof.meta_size
     while True:
@@ -317,20 +319,20 @@ def _read_last_aware(f, video_off: int, prof: Profile, size: int):
                 sizes.append(p - start)
                 return sizes, p, keys
         if p + 5 > size:
-            raise ScanError('fim dos dados no meio do vídeo')
+            raise ScanError(L('reason.eof_video'))
         f.seek(p)
         hdr = f.read(5)
         n = struct.unpack('>I', hdr[:4])[0]
         t = hdr[4] & 0x1F
         if n == 0 or n > (64 << 20) or hdr[4] & 0x80 or t == 0 or t > 23:
-            raise ScanError(f'NAL inválido em {p}')
+            raise ScanError(L('reason.bad_nal', pos=p))
         if t == 9:
             if seen > 0:
                 sizes.append(p - start)
                 start = p
             seen += 1
             if seen > prof.G:
-                raise ScanError(f'mais de {prof.G} quadros no bloco em {video_off}')
+                raise ScanError(L('reason.too_many', g=prof.G, pos=video_off))
         elif t == 5 and (not keys or keys[-1] != seen - 1):
             keys.append(seen - 1)
         p += 4 + n
@@ -461,10 +463,8 @@ def plan(path: str, refs: list[str], find_moov, data_start: int | None = None) -
         if best is None or (len(chunks), prof.n_keys) > (len(best.chunks), best.profile.n_keys):
             best = Plan(prof, chunks, end, reason, start, gaps)
     if best is None or not best.chunks:
-        msg = 'nenhuma referência compatível'
-        if best is not None:
-            msg += f' — {best.reason}'
-        raise ValueError(msg)
+        from .i18n import Join
+        raise ValueError(Join(L('err.no_compatible'), best.reason if best is not None else '', sep=' — '))
     return best
 
 
@@ -472,11 +472,11 @@ def write(path: str, p: Plan, dst: str, chunk_cb=None) -> str:
     prof = p.profile
     hdr = bytearray(prof.header[:p.data_start] if p.data_start <= len(prof.header) else prof.header)
     if len(hdr) != p.data_start:
-        raise ValueError('offset de dados diferente do cabeçalho da referência')
+        raise ValueError(L('err.offset_mismatch'))
     # mdat com largesize ocupa os 16 bytes finais do cabeçalho
     mdat_pos = p.data_start - 16
     if hdr[mdat_pos + 4:mdat_pos + 8] != b'mdat':
-        raise ValueError('referência sem mdat de 64 bits')
+        raise ValueError(L('err.ref_mdat'))
     hdr[mdat_pos + 8:mdat_pos + 16] = struct.pack('>Q', p.data_end - mdat_pos)
     moov = build_moov(prof, p.chunks)
     total = p.data_end - p.data_start

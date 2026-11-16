@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.0 — 2026-11-16
+- **Português e inglês**, escolhidos no menu **Idioma** da barra de menus ou em **Ajustes…** (⌘,). O app abre no idioma do macOS, a troca é na hora (inclusive dos diagnósticos já feitos) e a escolha fica salva.
+- Diagnósticos, relatório CSV e linha de comando (`--lang pt|en`) também nos dois idiomas. No CSV, a coluna `status` mantém o código fixo para scripts, e `status_label` traz o nome traduzido.
+- Menu **Ajuda** com página do projeto, relatar problema e instruções de instalação para colegas.
+- Instalador bilíngue: fundo com os passos em PT e EN, mais "How to open.txt".
+- Alinhamento: rótulos e valores da janela Sobre alinhados pela primeira linha; títulos das colunas da tabela alinhados à esquerda também no macOS.
+
 ## 0.5.0 — 2026-11-16
 - **Interface nova** em CustomTkinter, que segue o modo claro/escuro do macOS:
   - cabeçalho com origem;

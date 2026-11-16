@@ -23,7 +23,9 @@ import shutil
 import struct
 import subprocess
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
+
+from .i18n import L, Join, msg, t as tr
 
 HDR = 262144                 # ftyp + uuid + free + cabeçalho mdat (layout XAVC S)
 MDAT_POS = HDR - 16          # 262128
@@ -165,7 +167,7 @@ class Clip:
     path: str
     size: int
     status: str = UNKNOWN
-    detail: str = ''
+    detail: object = ''          # str, L ou Join — traduzido na hora de exibir
     camera: str = ''
     codec: str = ''
     fps: str = ''
@@ -173,8 +175,12 @@ class Clip:
     audio_db: float | None = None
     reference: str = ''
     output: str = ''
-    verify: str = ''
+    verify: object = ''
     extra: dict = field(default_factory=dict)
+
+    def note(self, m):
+        """Acrescenta uma observação ao diagnóstico."""
+        self.detail = Join(*(self.detail.parts if isinstance(self.detail, Join) else [self.detail]), m, sep='; ')
 
     @property
     def name(self):
@@ -210,26 +216,26 @@ def diagnose(path: str) -> Clip:
     c = Clip(path, os.path.getsize(path))
     c.__dict__.update({k: v for k, v in sony_xml(path).items()})
     if c.size == 0:
-        c.status, c.detail = EMPTY, 'arquivo com 0 bytes'
+        c.status, c.detail = EMPTY, L('diag.empty_file')
         return c
     with open(path, 'rb') as f:
         head = f.read(HDR)
     if head.count(0) == len(head):
-        c.status, c.detail = EMPTY, 'início zerado'
+        c.status, c.detail = EMPTY, L('diag.zero_start')
     m = find_moov(path)
     if m is None:
         c.status = NO_MOOV
-        c.detail = 'índice (moov) ausente — gravação interrompida'
+        c.detail = L('diag.no_moov')
         return c
     c.moov_pos, moov = m
     try:
         tracks = parse_moov(moov)
     except Exception as e:
-        c.status, c.detail = UNKNOWN, f'moov ilegível: {e}'
+        c.status, c.detail = UNKNOWN, L('diag.bad_moov', err=e)
         return c
     c.extra['tracks'] = ','.join(f'{t.handler}:{t.fmt}' for t in tracks)
     if any(o >= c.moov_pos for t in tracks for o in t.offsets):
-        c.status, c.detail = UNKNOWN, 'moov aponta para fora dos dados'
+        c.status, c.detail = UNKNOWN, L('diag.moov_out')
         return c
     c.audio_db = _audio_peak_db(path, tracks)
     good_head = head[4:8] == b'ftyp' and head[MDAT_POS + 4:MDAT_POS + 8] == b'mdat'
@@ -237,12 +243,12 @@ def diagnose(path: str) -> Clip:
         c.status, c.detail = OK, ''
     elif c.status != EMPTY:
         c.status = HEADER
-        c.detail = 'cabeçalho corrompido, moov íntegro — reparável'
+        c.detail = L('diag.header')
     else:
         c.status = HEADER
-        c.detail = 'início zerado, moov íntegro — reparável'
+        c.detail = L('diag.header_zero')
     if c.audio_db is not None and c.audio_db < -75:
-        c.detail = (c.detail + '; ' if c.detail else '') + 'áudio em silêncio na gravação original'
+        c.note(L('diag.silent'))
     return c
 
 
@@ -258,7 +264,7 @@ def scan(folder: str, progress=None) -> list[Clip]:
         try:
             clips.append(diagnose(p))
         except Exception as e:
-            clips.append(Clip(p, os.path.getsize(p), UNKNOWN, f'erro: {e}'))
+            clips.append(Clip(p, os.path.getsize(p), UNKNOWN, L('diag.error', err=e)))
         if progress:
             progress(i + 1, len(files), clips[-1])
     _assign_references(clips, progress)
@@ -289,20 +295,19 @@ def plan_rebuild(c: Clip, refs: list[str], data_start: int | None = None):
     c._plan = p
     c.extra['mode'] = 'reconstruir'
     lost = os.path.getsize(c.path) - p.data_end
-    msg = f'reconstrução: {p.seconds:.1f} s recuperáveis ({len(p.chunks)} blocos'
-    if p.gaps:
-        msg += f'; {len(p.gaps)} trecho(s) danificado(s) pulado(s), {p.gap_bytes / 1e6:.1f} MB'
-    if lost > 1e6 and p.reason != 'fim da gravação':
-        msg += f'; {lost / 1e6:.1f} MB finais descartados'
-    c.detail = msg + f') — {p.reason}'
+    extra = Join(
+        L('diag.rebuild_gaps', n=len(p.gaps), mb=f'{p.gap_bytes / 1e6:.1f}') if p.gaps else '',
+        L('diag.rebuild_lost', mb=f'{lost / 1e6:.1f}') if lost > 1e6 and getattr(p.reason, 'key', '') != 'reason.end'
+        else '')
+    c.detail = L('diag.rebuild', secs=f'{p.seconds:.1f}', chunks=len(p.chunks), extra=extra, reason=p.reason)
     return p
 
 
-def set_extract(c: Clip, refs: list[str], why: str = ''):
+def set_extract(c: Clip, refs: list[str], why=''):
     c.extra['mode'] = 'extrair'
     c.extra['refs'] = list(refs)
     c.reference = refs[0] if refs else ''
-    c.detail = (why + ' — ' if why else '') + 'extração bruta: vídeo .h264 (+ MP4 limpo)'
+    c.detail = Join(why, L('diag.extract'), sep=' — ')
 
 
 def _assign_references(clips: list[Clip], progress=None, extra_refs: list[Clip] | None = None):
@@ -315,12 +320,12 @@ def _assign_references(clips: list[Clip], progress=None, extra_refs: list[Clip] 
                 c.reference = pool[0].path
                 c.extra['mode'] = 'cabecalho'
             else:
-                c.detail += '; sem clipe de referência válido na pasta'
+                c.note(L('diag.no_ref'))
             continue
         try:
             plan_rebuild(c, [r.path for r in pool[:40]])
         except Exception as e:
-            set_extract(c, [r.path for r in pool[:40]], f'reconstrução falhou ({e})')
+            set_extract(c, [r.path for r in pool[:40]], L('diag.rebuild_failed', err=msg(e)))
         if progress:
             progress(i + 1, len(todo), c)
 
@@ -351,7 +356,7 @@ def scan_files(paths: list[str], progress=None, max_refs: int = 30) -> list[Clip
         try:
             clips.append(diagnose(p))
         except Exception as e:
-            clips.append(Clip(p, os.path.getsize(p), UNKNOWN, f'erro: {e}'))
+            clips.append(Clip(p, os.path.getsize(p), UNKNOWN, L('diag.error', err=e)))
         if progress:
             progress(i + 1, len(paths), clips[-1])
     chosen = set(paths)
@@ -382,7 +387,7 @@ def scan_files(paths: list[str], progress=None, max_refs: int = 30) -> list[Clip
 
 def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
     if c.status not in REPAIRABLE:
-        raise ValueError(f'{c.name}: status {c.status} não é reparável')
+        raise ValueError(L('err.not_repairable', name=c.name, status=c.status))
     os.makedirs(out_dir, exist_ok=True)
     stem, ext = os.path.splitext(c.name)
     mode = c.extra.get('mode', 'cabecalho' if c.status == HEADER else 'reconstruir')
@@ -399,12 +404,14 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
                              prof, chunk_cb)
         c.output = res['mov'] or res['h264'] or ''
         if not res['frames']:
-            c.verify = 'nenhum quadro H.264 válido encontrado — sem recuperação possível'
+            c.verify = L('verify.nothing')
             return c.output
-        c.verify = f"{res['frames']} quadros extraídos" + (f", {res['audio_s']:.1f} s de áudio" if res['wav'] else ', sem áudio')
+        c.verify = Join(L('verify.extracted', n=res['frames']),
+                        L('verify.extracted_audio', s=f"{res['audio_s']:.1f}") if res['wav']
+                        else L('verify.extracted_noaudio'))
         return c.output
     if not c.reference:
-        raise ValueError(f'{c.name}: sem referência')
+        raise ValueError(L('err.no_ref', name=c.name))
     if mode == 'reconstruir':
         from . import rebuild as rb
         p = getattr(c, '_plan', None) or plan_rebuild(c, [c.reference])
@@ -450,11 +457,11 @@ def verify(c: Clip) -> str:
         return c.verify
     ff = ffmpeg_bin()
     if not ff or not c.output:
-        c.verify = 'ffmpeg não encontrado — verificação pulada'
+        c.verify = L('verify.no_ffmpeg')
         return c.verify
     fp = ffmpeg_bin('ffprobe')
     if not fp:
-        c.verify = 'ffprobe não encontrado — verificação pulada'
+        c.verify = L('verify.no_ffprobe')
         return c.verify
     r = subprocess.run([fp, '-v', 'error', '-count_frames', '-select_streams', 'v:0',
                         '-show_entries', 'stream=nb_frames,nb_read_frames', '-of', 'csv=p=0',
@@ -462,22 +469,30 @@ def verify(c: Clip) -> str:
     try:
         total, read = (int(x) for x in r.stdout.strip().split(',')[:2])
         lost = total - read
-        c.verify = f'{read}/{total} quadros decodificados' + (f' ({lost} perdidos no início)' if lost else '')
+        c.verify = Join(L('verify.frames', read=read, total=total), L('verify.lost', n=lost) if lost else '')
     except ValueError:
-        c.verify = 'falha ao decodificar o vídeo'
+        c.verify = L('verify.fail')
     if c.audio_db is not None:
-        c.verify += f' · áudio pico {c.audio_db} dBFS'
+        c.verify = Join(c.verify, L('verify.audio_peak', db=c.audio_db))
     return c.verify
 
 
 def write_report(clips: list[Clip], path: str):
-    cols = ['name', 'status', 'detail', 'camera', 'codec', 'fps', 'size',
+    """Relatório CSV no idioma atual. A coluna `status` mantém o código fixo (para scripts);
+    `status_label` traz o nome traduzido."""
+    cols = ['name', 'status', 'status_label', 'action', 'detail', 'camera', 'codec', 'fps', 'size',
             'audio_db', 'reference', 'output', 'verify', 'path']
     with open(path, 'w', newline='', encoding='utf-8') as f:
         w = csv.writer(f)
-        w.writerow(cols)
+        w.writerow([tr(f'csv.{k}') for k in cols])
         for c in clips:
-            d = asdict(c)
-            d['name'] = c.name
-            d['reference'] = os.path.basename(c.reference)
-            w.writerow([d.get(k, '') for k in cols])
+            mode = c.extra.get('mode') if c.status in REPAIRABLE else None
+            row = {
+                'name': c.name, 'status': c.status, 'status_label': tr(f'status.{c.status}'),
+                'action': tr(f'mode.{mode}') if mode else '', 'detail': str(c.detail),
+                'camera': c.camera, 'codec': c.codec, 'fps': c.fps, 'size': c.size,
+                'audio_db': '' if c.audio_db is None else c.audio_db,
+                'reference': os.path.basename(c.reference), 'output': c.output,
+                'verify': str(c.verify), 'path': c.path,
+            }
+            w.writerow([row[k] for k in cols])

@@ -86,30 +86,46 @@ def icon():
 
 
 def dmg_background(scale):
-    W, H = 680 * scale, 480 * scale
+    """Fundo bilíngue da janela do instalador: ícones no alto, passos em PT e EN embaixo."""
+    W, H = 680 * scale, 500 * scale
     img = Image.new('RGB', (W, H), BG)
     d = ImageDraw.Draw(img)
     s = scale
-    d.text((40 * s, 30 * s), 'Second Take', font=font(26 * s, 'Bold'), fill=INK)
-    d.text((40 * s, 64 * s), 'Arraste o app para a pasta Aplicativos', font=font(15 * s, 'Regular'), fill=MUTED)
+    d.text((40 * s, 28 * s), 'Second Take', font=font(26 * s, 'Bold'), fill=INK)
+    d.text((40 * s, 62 * s), 'Arraste para Aplicativos  ·  Drag to Applications', font=font(14 * s, 'Regular'),
+           fill=MUTED)
     # seta entre os ícones (ícones centrados em x=170 e x=510, y=200)
     y = 200 * s
     d.line([(255 * s, y), (420 * s, y)], fill=(190, 190, 185), width=4 * s)
     d.polygon([(420 * s, y - 12 * s), (440 * s, y), (420 * s, y + 12 * s)], fill=(190, 190, 185))
-    # caixa de instruções
-    bx, by = 40 * s, 292 * s
-    d.rounded_rectangle([bx, by, W - 40 * s, H - 24 * s], radius=12 * s, fill=(255, 255, 255),
+    # caixa de instruções, duas colunas
+    bx, by, bw = 40 * s, 296 * s, W - 80 * s
+    d.rounded_rectangle([bx, by, bx + bw, H - 22 * s], radius=12 * s, fill=(255, 255, 255),
                         outline=(226, 226, 222), width=max(1, s))
-    d.text((bx + 20 * s, by + 16 * s), 'Na primeira vez que abrir', font=font(14 * s, 'SemiBold'), fill=INK)
-    steps = [
-        '1.  O Mac avisa que não conseguiu verificar o app. Feche o aviso (não mova para o Lixo).',
-        '2.  Abra Ajustes do Sistema › Privacidade e Segurança.',
-        '3.  Role até o fim e clique em “Abrir Mesmo Assim”. Só precisa fazer uma vez.',
+    d.line([(bx + bw // 2, by + 16 * s), (bx + bw // 2, H - 58 * s)], fill=(232, 232, 228), width=max(1, s))
+    cols = [
+        ('Na primeira vez que abrir', [
+            '1. O Mac avisa que não verificou o app:',
+            '    feche o aviso (não mova para o Lixo).',
+            '2. Ajustes do Sistema › Privacidade e',
+            '    Segurança › Abrir Mesmo Assim.',
+            '3. Pronto. Só precisa fazer uma vez.',
+        ]),
+        ('The first time you open it', [
+            '1. macOS says it could not verify the app:',
+            '    close it (don’t move it to the Trash).',
+            '2. System Settings › Privacy & Security ›',
+            '    Open Anyway.',
+            '3. Done. You only need to do this once.',
+        ]),
     ]
-    for i, t in enumerate(steps):
-        d.text((bx + 20 * s, by + (44 + i * 24) * s), t, font=font(12 * s, 'Regular'), fill=INK)
-    d.text((bx + 20 * s, by + 128 * s), 'Ou, no Terminal:  xattr -cr "/Applications/Second Take.app"',
-           font=font(11 * s, 'Regular'), fill=MUTED)
+    for ci, (title, lines) in enumerate(cols):
+        x = bx + 18 * s + ci * (bw // 2)
+        d.text((x, by + 14 * s), title, font=font(13 * s, 'SemiBold'), fill=INK)
+        for i, ln in enumerate(lines):
+            d.text((x, by + (40 + i * 20) * s), ln, font=font(11 * s, 'Regular'), fill=INK)
+    d.text((bx + 18 * s, H - 44 * s), 'Terminal:  xattr -cr "/Applications/Second Take.app"',
+           font=font(10 * s, 'Regular'), fill=MUTED)
     name = 'dmg_background.png' if scale == 1 else 'dmg_background@2x.png'
     img.save(os.path.join(OUT, name), dpi=(72 * scale, 72 * scale))
 
