@@ -71,3 +71,15 @@ def test_init_precedence(monkeypatch):
     assert i18n.init() == 'en'
     assert i18n.init('pt') == 'pt'
     assert t('app.repair') == 'Reparar'
+
+
+def test_auto_preference_follows_system(monkeypatch, tmp_path):
+    monkeypatch.delenv('SECONDTAKE_LANG', raising=False)
+    monkeypatch.setattr(i18n, '_config_path', lambda: str(tmp_path / 'config.json'))
+    monkeypatch.setattr(i18n, 'system_lang', lambda: 'en')
+    assert i18n.preference() == 'auto'
+    assert i18n.init() == 'en'                       # sem preferência: segue o sistema
+    i18n.set_preference('pt')
+    assert i18n.preference() == 'pt' and i18n.init() == 'pt'   # fixo
+    i18n.set_preference('auto')
+    assert i18n.preference() == 'auto' and i18n.init() == 'en'  # voltou a seguir o sistema

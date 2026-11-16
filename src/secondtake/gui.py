@@ -126,13 +126,14 @@ class App(ctk.CTk):
         self.after(100, self._poll)
 
     # ------------------------------------------------------------ idioma
-    def set_language(self, lang: str):
-        if lang == i18n.get_lang():
-            return
-        i18n.set_lang(lang)
-        i18n.save_config(lang=lang)
+    def set_language(self, pref: str):
+        """pref: 'auto' (segue o macOS), 'pt' ou 'en'."""
+        before = i18n.get_lang()
+        i18n.set_preference(pref)
         if hasattr(self, '_lang_var'):
-            self._lang_var.set(lang)
+            self._lang_var.set(pref)
+        if i18n.get_lang() == before:
+            return
         sel = set(self.tree.selection())
         search = self.search.get()
         for w in self.winfo_children():
@@ -335,12 +336,15 @@ class App(ctk.CTk):
     def _install_menu(self):
         """Barra de menus nativa: Second Take (Sobre, Ajustes ⌘,), Idioma e Ajuda."""
         bar = tk.Menu(self)
-        self._lang_var = tk.StringVar(value=i18n.get_lang())
+        self._lang_var = tk.StringVar(value=i18n.preference())
         if sys.platform == 'darwin':
             self.createcommand('tkAboutDialog', self.about)
             self.createcommand('tk::mac::ShowPreferences', self.preferences)
             self.createcommand('::tk::mac::ShowHelp', lambda: webbrowser.open(REPO_URL))
         lang_menu = tk.Menu(bar, tearoff=0)
+        lang_menu.add_radiobutton(label=t('prefs.auto'), value='auto', variable=self._lang_var,
+                                  command=lambda: self.set_language('auto'))
+        lang_menu.add_separator()
         for code in i18n.LANGS:
             lang_menu.add_radiobutton(label=i18n.LANG_NAMES[code], value=code, variable=self._lang_var,
                                       command=lambda c=code: self.set_language(c))
@@ -633,16 +637,16 @@ class PrefsDialog(_Dialog):
     """Ajustes (⌘,): idioma."""
 
     def __init__(self, app):
-        super().__init__(app, t('prefs.title'), '420x190')
+        super().__init__(app, t('prefs.title'), '480x200')
         f = ctk.CTkFrame(self, fg_color='transparent')
         f.pack(fill='both', expand=True, padx=24, pady=20)
         f.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(f, text=t('app.language'), font=(FONT, 13), text_color=PAL['text'], anchor='w').grid(
             row=0, column=0, sticky='w', padx=(0, 16))
-        names = [i18n.LANG_NAMES[c] for c in i18n.LANGS]
-        self.choice = ctk.CTkOptionMenu(f, values=names, font=(FONT, 13), dropdown_font=(FONT, 13), width=180,
-                                        command=self._pick)
-        self.choice.set(i18n.LANG_NAMES[i18n.get_lang()])
+        self._names = {'auto': t('prefs.auto'), **{c: i18n.LANG_NAMES[c] for c in i18n.LANGS}}
+        self.choice = ctk.CTkOptionMenu(f, values=list(self._names.values()), font=(FONT, 13),
+                                        dropdown_font=(FONT, 13), width=240, command=self._pick)
+        self.choice.set(self._names[i18n.preference()])
         self.choice.grid(row=0, column=1, sticky='w')
         ctk.CTkLabel(f, text=t('prefs.lang_hint'), font=(FONT, 11), text_color=PAL['muted'], anchor='w',
                      justify='left', wraplength=360).grid(row=1, column=0, columnspan=2, sticky='w', pady=(10, 0))
@@ -651,7 +655,7 @@ class PrefsDialog(_Dialog):
                                                                                  pady=(18, 0))
 
     def _pick(self, name):
-        code = next(c for c, n in i18n.LANG_NAMES.items() if n == name)
+        code = next(c for c, n in self._names.items() if n == name)
         self.destroy()
         self.app.set_language(code)
 

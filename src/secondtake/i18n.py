@@ -200,8 +200,9 @@ CATALOG: dict[str, tuple[str, str]] = {
     'app.scan_error': ('Erro na análise.', 'Analysis failed.'),
     'app.language': ('Idioma', 'Language'),
     'prefs.title': ('Ajustes', 'Settings'),
-    'prefs.lang_hint': ('Por padrão o Second Take segue o idioma do macOS. A escolha feita aqui fica salva.',
-                        'By default Second Take follows the macOS language. The choice made here is saved.'),
+    'prefs.auto': ('Automático (idioma do sistema)', 'Automatic (system language)'),
+    'prefs.lang_hint': ('No modo automático, o Second Take segue o idioma do macOS. Escolhendo um idioma, ele fica fixo.',
+                        'In automatic mode, Second Take follows the macOS language. Picking a language locks it.'),
 
     # ---- Sobre
     'about.title': ('Sobre o Second Take', 'About Second Take'),
@@ -407,8 +408,23 @@ def system_lang() -> str:
     return 'pt'
 
 
+def preference() -> str:
+    """Preferência salva: 'auto' (segue o sistema), 'pt' ou 'en'."""
+    p = load_config().get('lang', 'auto')
+    return p if p in LANGS else 'auto'
+
+
+def set_preference(pref: str) -> str:
+    """Salva 'auto', 'pt' ou 'en' e aplica. Retorna o idioma efetivo."""
+    pref = pref if pref in LANGS else 'auto'
+    save_config(lang=pref)
+    set_lang(system_lang() if pref == 'auto' else pref)
+    return _lang
+
+
 def init(explicit: str | None = None) -> str:
     """Define o idioma: argumento > SECONDTAKE_LANG > preferência salva > sistema."""
-    lang = explicit or os.environ.get('SECONDTAKE_LANG') or load_config().get('lang') or system_lang()
+    pref = preference()
+    lang = explicit or os.environ.get('SECONDTAKE_LANG') or (None if pref == 'auto' else pref) or system_lang()
     set_lang(lang)
     return _lang
