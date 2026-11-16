@@ -29,8 +29,8 @@ O XAVC S grava os dados em blocos regulares de cerca de 0,5 s: `[metadados rtmd]
 
 **Pelo código:**
 ```bash
-git clone https://github.com/super8produtora/second-take.git
-cd second-take
+git clone https://github.com/felipelimas8/secondtake.git
+cd secondtake
 python3 -m pip install -e .
 secondtake-gui            # interface
 secondtake --help         # linha de comando
