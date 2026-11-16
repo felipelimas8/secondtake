@@ -11,6 +11,7 @@ import json
 import re
 import ssl
 import time
+import urllib.error
 import urllib.request
 
 from . import __version__, i18n
@@ -40,14 +41,24 @@ def _ssl_context():
         return ssl.create_default_context()
 
 
-def fetch_latest(timeout: float = 6.0) -> dict:
-    """Última versão oficial: {'version', 'page', 'dmg', 'notes'}. Levanta exceção se falhar."""
+def fetch_latest(timeout: float = 6.0) -> dict | None:
+    """Última versão oficial: {'version', 'page', 'dmg', 'notes'}.
+
+    Retorna None quando ainda não há nenhuma release oficial publicada (o GitHub
+    responde 404 se só existem pré-releases/rascunhos, ou se o repositório é privado).
+    Outros erros de rede levantam exceção.
+    """
     req = urllib.request.Request(API_LATEST, headers={
         'Accept': 'application/vnd.github+json',
         'User-Agent': f'SecondTake/{__version__}',
     })
-    with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as r:
-        data = json.load(r)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as r:
+            data = json.load(r)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise
     tag = data.get('tag_name', '')
     dmg = next((a.get('browser_download_url') for a in data.get('assets', [])
                 if a.get('name', '').lower().endswith('.dmg')), None)
@@ -73,7 +84,7 @@ def check(force: bool = False, fetch=fetch_latest) -> dict | None:
             return None
     info = fetch()
     i18n.save_config(last_update_check=time.time())
-    if not is_newer(info['version']):
+    if not info or not is_newer(info['version']):
         return None
     if not force and cfg.get('skip_version') == info['version']:
         return None

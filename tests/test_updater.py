@@ -48,3 +48,19 @@ def test_network_error_propagates_only_when_called():
         raise OSError('sem rede')
     with pytest.raises(OSError):
         updater.check(force=True, fetch=boom)
+
+
+def test_no_official_release_yet_is_not_an_error():
+    assert updater.check(force=True, fetch=lambda: None) is None
+
+
+def test_github_404_means_no_release(monkeypatch):
+    import io
+    import urllib.error
+    import urllib.request
+
+    def fake_urlopen(*a, **k):
+        raise urllib.error.HTTPError(updater.API_LATEST, 404, 'Not Found', {}, io.BytesIO(b''))
+    monkeypatch.setattr(urllib.request, 'urlopen', fake_urlopen)
+    assert updater.fetch_latest() is None
+    assert updater.check(force=True) is None

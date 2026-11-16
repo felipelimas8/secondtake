@@ -4,6 +4,7 @@
 - **Verificação de atualizações**: ao abrir (no máximo uma vez por dia) o app consulta a última versão oficial no GitHub e, se houver uma nova, mostra uma faixa com **Baixar** (abre o `.dmg` novo), **Agora não** e **Pular esta versão**.
 - **Second Take > Verificar atualizações…** para checar na hora.
 - Ajustes (⌘,): opção para desligar a verificação automática.
+- Sem nenhuma versão oficial publicada (ou com o repositório privado), a verificação considera o app atualizado em vez de mostrar erro.
 - A consulta é anônima (API pública do GitHub) e só considera versões oficiais `v*`, nunca a prévia `main-build`.
 
 ## 0.6.0 — 2026-11-16
