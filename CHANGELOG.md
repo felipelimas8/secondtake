@@ -13,6 +13,9 @@
 - Verificação de espaço livre na saída antes de reparar.
 - Duplo clique numa linha abre o Avançado.
 - Janelas Sobre e Avançado redesenhadas.
+- **Instalador `.dmg`**: janela com o ícone do app, atalho para Aplicativos, os passos para liberar o app no Gatekeeper e o arquivo "Como abrir.txt".
+- **Ícone próprio**: claquete "TAKE 2", no app, no Dock, na janela Sobre e no volume do DMG.
+- Sobre > **Como instalar em outro Mac**: copia o link do instalador e as instruções para mandar a colegas.
 
 ## 0.4.1 — 2026-11-16
 - Janela **Sobre** própria: o que o app faz, formatos suportados, autoria, licença, links do projeto e estado do ffprobe; botão para copiar as informações para uma *issue*.

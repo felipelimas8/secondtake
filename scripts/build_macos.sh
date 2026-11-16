@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Gera "Second Take.app" (e um .zip para distribuição) em dist/.
-# Uso: scripts/build_macos.sh [--install]   (--install copia para /Applications)
+# Gera "Second Take.app", o instalador .dmg e um .zip em dist/.
+# Uso: scripts/build_macos.sh [--install]   (--install copia o app para /Applications)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -12,12 +12,26 @@ esac
 
 python3 -m pip install -q -e ".[build]"
 VERSION=$(python3 -c "import secondtake; print(secondtake.__version__)")
+ARCH=$(uname -m)
+
+# ícone: assets/icon_1024.png -> build/SecondTake.icns
+mkdir -p build
+ICNS=build/SecondTake.icns
+if [ -f assets/icon_1024.png ]; then
+  SET=build/SecondTake.iconset
+  rm -rf "$SET" && mkdir -p "$SET"
+  for s in 16 32 128 256 512; do
+    sips -z $s $s assets/icon_1024.png --out "$SET/icon_${s}x${s}.png" >/dev/null
+    sips -z $((s*2)) $((s*2)) assets/icon_1024.png --out "$SET/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$SET" -o "$ICNS"
+fi
 ICON=()
-[ -f assets/SecondTake.icns ] && ICON=(--icon assets/SecondTake.icns)
+[ -f "$ICNS" ] && ICON=(--icon "$ICNS")
 
 python3 -m PyInstaller --windowed --noconfirm --clean \
   --name "Second Take" --paths src --collect-submodules secondtake \
-  --collect-data customtkinter \
+  --collect-data customtkinter --collect-data secondtake \
   --osx-bundle-identifier br.com.super8.secondtake \
   ${ICON[@]+"${ICON[@]}"} scripts/secondtake_app.py
 
@@ -30,8 +44,47 @@ PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :LSApplicationCategoryType string public.app-category.video" "$PLIST" 2>/dev/null || true
 xattr -cr "$APP"
 codesign -s - --force --deep "$APP"
-(cd dist && ditto -c -k --keepParent "Second Take.app" "SecondTake-$VERSION-macOS-$(uname -m).zip")
-echo "OK: $APP  ·  dist/SecondTake-$VERSION-macOS-$(uname -m).zip"
+
+# .zip (para quem prefere)
+(cd dist && ditto -c -k --keepParent "Second Take.app" "SecondTake-$VERSION-macOS-$ARCH.zip")
+
+# instalador .dmg: janela com fundo, ícone do app, atalho para Aplicativos e "Como abrir.txt"
+DMG="dist/SecondTake-$VERSION-macOS-$ARCH.dmg"
+rm -f "$DMG"
+STAGE=build/dmg
+rm -rf "$STAGE" && mkdir -p "$STAGE"
+cp -R "$APP" "$STAGE/"
+cp "assets/Como abrir.txt" "$STAGE/"
+if command -v create-dmg >/dev/null 2>&1; then
+  BG=assets/dmg_background.png
+  if [ -f assets/dmg_background@2x.png ]; then
+    tiffutil -cathidpicheck assets/dmg_background.png assets/dmg_background@2x.png -out build/dmg_background.tiff >/dev/null
+    BG=build/dmg_background.tiff
+  fi
+  VOLICON=()
+  [ -f "$ICNS" ] && VOLICON=(--volicon "$ICNS")
+  dmg() {
+    create-dmg \
+      --volname "Second Take $VERSION" ${VOLICON[@]+"${VOLICON[@]}"} \
+      --background "$BG" \
+      --window-pos 200 120 --window-size 680 500 \
+      --icon-size 104 --text-size 13 \
+      --icon "Second Take.app" 170 200 --hide-extension "Second Take.app" \
+      --app-drop-link 510 200 \
+      --icon "Como abrir.txt" 600 52 \
+      --no-internet-enable "$@" \
+      "$DMG" "$STAGE" >/dev/null
+  }
+  # o layout da janela usa o Finder via AppleScript; em máquinas sem sessão gráfica, cai para --skip-jenkins
+  dmg || { rm -f "$DMG"; dmg --skip-jenkins; }
+else
+  echo "create-dmg não encontrado (brew install create-dmg): gerando DMG simples, sem layout." >&2
+  ln -s /Applications "$STAGE/Aplicativos"
+  hdiutil create -volname "Second Take $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+fi
+echo "OK: $APP"
+echo "    $DMG"
+echo "    dist/SecondTake-$VERSION-macOS-$ARCH.zip"
 
 if [ "${1:-}" = "--install" ]; then
   rm -rf "/Applications/Second Take.app"

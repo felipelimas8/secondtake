@@ -24,6 +24,15 @@ from . import core
 REPO_URL = 'https://github.com/felipelimas8/secondtake'
 ISSUES_URL = REPO_URL + '/issues'
 LICENSE_URL = 'https://www.gnu.org/licenses/gpl-3.0.html'
+RELEASES_URL = REPO_URL + '/releases/latest'
+INSTALL_HELP = f"""Second Take — recuperação de clipes de câmera corrompidos
+Baixe o instalador (.dmg): {RELEASES_URL}
+
+1. Abra o .dmg e arraste o Second Take para Aplicativos.
+2. Abra o app. O Mac vai avisar que não conseguiu verificar o app: feche o aviso (não mova para o Lixo).
+3. Ajustes do Sistema > Privacidade e Segurança > role até o fim > Abrir Mesmo Assim.
+Pronto, só precisa fazer isso uma vez.
+(Ou no Terminal: xattr -cr "/Applications/Second Take.app")"""
 
 FONT = 'SF Pro Text' if sys.platform == 'darwin' else 'Segoe UI' if sys.platform == 'win32' else 'Helvetica'
 MONO = 'SF Mono' if sys.platform == 'darwin' else 'Consolas' if sys.platform == 'win32' else 'Courier'
@@ -54,6 +63,19 @@ STATUS_LABEL = {
 }
 STATUS_ICON = {'ok': '✓', 'warn': '●', 'info': '●', 'danger': '▲', 'muted': '·'}
 MODE_LABEL = {'cabecalho': 'Reparar', 'reconstruir': 'Reconstruir', 'extrair': 'Extrair'}
+
+
+def app_icon(size: int):
+    """Ícone do app como CTkImage (ou None se a imagem não estiver disponível)."""
+    try:
+        from importlib import resources
+        from PIL import Image
+        with resources.files(__package__).joinpath('icon.png').open('rb') as fh:
+            im = Image.open(fh)
+            im.load()
+        return ctk.CTkImage(light_image=im, dark_image=im, size=(size, size))
+    except Exception:
+        return None
 
 
 def human(n):
@@ -120,8 +142,12 @@ class App(ctk.CTk):
         head = ctk.CTkFrame(self, fg_color=PAL['card'], corner_radius=0, border_width=0)
         head.grid(row=0, column=0, sticky='ew')
         head.grid_columnconfigure(1, weight=1)
-        logo = ctk.CTkLabel(head, text='T2', width=40, height=40, corner_radius=10,
-                            fg_color=PAL['accent'], text_color='#FFFFFF', font=(FONT, 15, 'bold'))
+        icon = app_icon(44)
+        if icon:
+            logo = ctk.CTkLabel(head, text='', image=icon, width=44, height=44)
+        else:
+            logo = ctk.CTkLabel(head, text='T2', width=40, height=40, corner_radius=10,
+                                fg_color=PAL['accent'], text_color='#FFFFFF', font=(FONT, 15, 'bold'))
         logo.grid(row=0, column=0, rowspan=2, padx=(20, 12), pady=14)
         ctk.CTkLabel(head, text='Second Take', font=(FONT, 18, 'bold'), text_color=PAL['text'],
                      anchor='w').grid(row=0, column=1, sticky='sw', pady=(14, 0))
@@ -551,11 +577,15 @@ class AboutDialog(_Dialog):
     """Janela Sobre: versão, o que faz, autoria, licença e ambiente."""
 
     def __init__(self, app):
-        super().__init__(app, 'Sobre o Second Take', '540x700')
+        super().__init__(app, 'Sobre o Second Take', '580x720')
         f = ctk.CTkFrame(self, fg_color='transparent')
         f.pack(fill='both', expand=True, padx=28, pady=22)
-        ctk.CTkLabel(f, text='T2', width=64, height=64, corner_radius=16, fg_color=PAL['accent'],
-                     text_color='#FFFFFF', font=(FONT, 24, 'bold')).pack(pady=(0, 10))
+        icon = app_icon(88)
+        if icon:
+            ctk.CTkLabel(f, text='', image=icon).pack(pady=(0, 6))
+        else:
+            ctk.CTkLabel(f, text='T2', width=64, height=64, corner_radius=16, fg_color=PAL['accent'],
+                         text_color='#FFFFFF', font=(FONT, 24, 'bold')).pack(pady=(0, 10))
         ctk.CTkLabel(f, text='Second Take', font=(FONT, 22, 'bold'), text_color=PAL['text']).pack()
         ctk.CTkLabel(f, text=f'Versão {__version__}', font=(FONT, 12), text_color=PAL['muted']).pack(pady=(0, 8))
         ctk.CTkLabel(f, text='Recuperação de clipes de câmera corrompidos.\nDá uma segunda chance ao take.',
@@ -596,11 +626,21 @@ class AboutDialog(_Dialog):
                           command=lambda u=url: webbrowser.open(u)).pack(side='left', padx=4)
         b = ctk.CTkFrame(f, fg_color='transparent')
         b.pack(pady=(14, 0))
+        ctk.CTkButton(b, text='Como instalar em outro Mac', height=32, font=(FONT, 12), command=self._install_help,
+                      fg_color='transparent', border_width=1, border_color=PAL['border'],
+                      text_color=PAL['text'], hover_color=PAL['card2']).pack(side='left', padx=4)
         ctk.CTkButton(b, text='Copiar informações', height=32, font=(FONT, 12), command=self._copy,
                       fg_color='transparent', border_width=1, border_color=PAL['border'],
                       text_color=PAL['text'], hover_color=PAL['card2']).pack(side='left', padx=4)
         ctk.CTkButton(b, text='Fechar', height=32, width=90, font=(FONT, 12), command=self.destroy,
                       fg_color=PAL['accent'], hover_color=PAL['accent_h']).pack(side='left', padx=4)
+
+    def _install_help(self):
+        """Copia as instruções de instalação para mandar a um colega."""
+        self.clipboard_clear()
+        self.clipboard_append(INSTALL_HELP)
+        messagebox.showinfo('Second Take', 'Instruções copiadas. Cole na mensagem para o colega '
+                                           'junto com o link do instalador.', parent=self)
 
     def _copy(self):
         txt = f'Second Take {__version__}\n' + '\n'.join(f'{k}: {v}' for k, v in self._rows)

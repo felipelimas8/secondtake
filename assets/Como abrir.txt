@@ -1,0 +1,23 @@
+SECOND TAKE — como abrir pela primeira vez
+===========================================
+
+1. Arraste o "Second Take" para a pasta Aplicativos.
+
+2. Abra o app. Como ele ainda não é verificado pela Apple, o Mac mostra
+   um aviso dizendo que não conseguiu verificar o app.
+   Feche o aviso. NÃO clique em "Mover para o Lixo".
+
+3. Abra Ajustes do Sistema > Privacidade e Segurança, role até o fim
+   e clique em "Abrir Mesmo Assim". Confirme com sua senha ou Touch ID.
+
+4. Abra o Second Take de novo. Pronto: daqui para frente ele abre
+   normalmente, com duplo clique.
+
+Alternativa pelo Terminal (faz o mesmo que o passo 3):
+
+    xattr -cr "/Applications/Second Take.app"
+
+----------------------------------------------------------------------
+Por que isso acontece? O Second Take é software livre, feito pela
+Super8 Produtora, e ainda não passou pela notarização paga da Apple.
+O código está aberto em https://github.com/felipelimas8/secondtake

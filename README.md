@@ -25,7 +25,13 @@ O XAVC S grava os dados em blocos regulares de cerca de 0,5 s: `[metadados rtmd]
 
 ## Instalação
 
-**App para macOS:** baixe o `.zip` mais recente em [Releases](../../releases), descompacte e arraste o **Second Take** para Aplicativos. Na primeira vez, clique com o botão direito, escolha **Abrir** e confirme. Enquanto o app não for notarizado pela Apple, esse passo é necessário.
+**App para macOS (Apple Silicon):** baixe o instalador `.dmg` mais recente em [Releases](../../releases/latest), abra e arraste o **Second Take** para Aplicativos. A janela do instalador já mostra os passos abaixo, e o arquivo "Como abrir.txt" está junto.
+
+O app ainda não é notarizado pela Apple, então na primeira abertura o macOS avisa que não conseguiu verificá-lo. Feche o aviso (não mova para o Lixo) e libere o app de uma destas formas:
+- **Ajustes do Sistema > Privacidade e Segurança:** role até o fim, clique em **Abrir Mesmo Assim** e confirme.
+- **Terminal:** `xattr -cr "/Applications/Second Take.app"`
+
+Isso só é necessário uma vez. Para mandar a um colega, use **Sobre o Second Take > Como instalar em outro Mac**: o app copia o link e as instruções prontos para colar.
 
 **Pelo código:**
 ```bash
@@ -72,7 +78,7 @@ A suíte de testes **não usa material de câmera**. O `tests/synth.py` gera cli
 
 **Nunca envie material de clientes para o repositório**, nem em *issues*. Veja o [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Para gerar o app no macOS: `scripts/build_macos.sh`.
+Para gerar o app e o instalador no macOS: `brew install create-dmg` e depois `scripts/build_macos.sh` (o `.app`, o `.dmg` e o `.zip` saem em `dist/`). O ícone e o fundo do instalador são gerados por `scripts/make_assets.py`.
 
 ## Licença
 
@@ -99,5 +105,7 @@ pip install -e .
 secondtake repair /path/to/CLIP -o ~/Movies/SecondTake --verify
 secondtake-gui
 ```
+
+The app is not notarized yet: on first launch click **Done**, then go to *System Settings > Privacy & Security > Open Anyway* (or run `xattr -cr "/Applications/Second Take.app"`).
 
 Licensed under GPL-3.0-or-later. The UI and messages are in Portuguese for now, and translations are welcome.
