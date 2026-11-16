@@ -1,5 +1,7 @@
 # Second Take
 
+![Second Take — recuperação de clipes de câmera corrompidos](assets/social_preview.png)
+
 **Recuperação de clipes de câmera corrompidos — dá uma segunda chance ao take.**
 *Recovery for corrupted camera clips — [English below](#english).*
 
