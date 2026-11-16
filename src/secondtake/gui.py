@@ -1090,8 +1090,45 @@ class AdvancedDialog(_Dialog):
             self.destroy()
 
 
+def _log_dir() -> str:
+    if sys.platform == 'darwin':
+        return os.path.expanduser('~/Library/Logs/Second Take')
+    if sys.platform == 'win32':
+        return os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'Second Take', 'Logs')
+    return os.path.expanduser('~/.local/state/secondtake')
+
+
 def main():
-    App().mainloop()
+    """Abre o app. Se algo falhar na abertura, grava o erro em um log e tenta mostrá-lo numa janela,
+    em vez de o app só piscar no Dock e fechar."""
+    import faulthandler
+    import traceback
+    log = None
+    try:
+        os.makedirs(_log_dir(), exist_ok=True)
+        log = os.path.join(_log_dir(), 'secondtake.log')
+        fh = open(log, 'a', encoding='utf-8')
+        fh.write(f'\n--- Second Take {__version__} · {platform.platform()} · Python {platform.python_version()}\n')
+        fh.flush()
+        faulthandler.enable(fh)          # registra até falhas fatais (segfault) do Tk
+    except Exception:
+        pass
+    try:
+        App().mainloop()
+    except Exception:
+        err = traceback.format_exc()
+        try:
+            with open(log, 'a', encoding='utf-8') as f:
+                f.write(err)
+        except Exception:
+            pass
+        try:
+            root = tk.Tk()
+            root.withdraw()
+            messagebox.showerror('Second Take', f'O Second Take não conseguiu abrir.\n\n{err[-1500:]}\n\nLog: {log}')
+        except Exception:
+            pass
+        raise
 
 
 if __name__ == '__main__':
