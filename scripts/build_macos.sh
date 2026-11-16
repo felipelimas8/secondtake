@@ -18,7 +18,7 @@ ICON=()
 python3 -m PyInstaller --windowed --noconfirm --clean \
   --name "Second Take" --paths src --collect-submodules secondtake \
   --osx-bundle-identifier br.com.super8.secondtake \
-  "${ICON[@]}" scripts/secondtake_app.py
+  ${ICON[@]+"${ICON[@]}"} scripts/secondtake_app.py
 
 APP="dist/Second Take.app"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist" || true
