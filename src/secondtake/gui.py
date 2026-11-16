@@ -691,7 +691,7 @@ class App(ctk.CTk, _DnDBase):
 
     def scan_selected(self):
         paths = filedialog.askopenfilenames(title=t('app.pick_files'),
-                                            filetypes=[(t('app.video'), '*.MP4 *.mp4 *.MOV *.mov')])
+                                            filetypes=[(t('app.video'), '*.MP4 *.mp4 *.MOV *.mov *.RSV *.rsv')])
         if not paths:
             return
         base = os.path.commonpath([os.path.dirname(p) for p in paths])
@@ -1017,7 +1017,7 @@ class AdvancedDialog(_Dialog):
 
     def _browse(self):
         p = filedialog.askopenfilename(title=t('adv.pick_ref'),
-                                       filetypes=[(t('app.video'), '*.MP4 *.mp4 *.MOV *.mov')])
+                                       filetypes=[(t('app.video'), '*.MP4 *.mp4 *.MOV *.mov *.RSV *.rsv')])
         if p:
             self.ref.set(p)
 

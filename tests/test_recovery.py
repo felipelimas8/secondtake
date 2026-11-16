@@ -134,6 +134,23 @@ def test_rebuild_after_interrupted_recording(work):
     assert pcm(out) == work['pcm'][:5 * info['a_chunk']]
 
 
+def test_rsv_interrupted_recording(work):
+    info = work['info']
+    strip_moov(work['victim'], info)
+    with open(work['victim'], 'r+b') as f:
+        f.truncate(info['vid_offs'][5] + 1000)
+    rsv = os.path.join(work['dir'], 'C0002.RSV')
+    os.rename(work['victim'], rsv)
+    c = by_name(core.scan(work['dir']), 'C0002.RSV')
+    assert c.status == core.NO_MOOV and c.extra['mode'] == 'reconstruir'
+    out = core.repair(c, work['out'])
+    assert out.endswith('C0002_RECONSTRUIDO.MP4')
+    got, err = frame_md5s(out)
+    assert err == 0 and got == work['golden'][:len(got)]
+    assert len(got) >= 5 * info['G'] - 2
+    assert pcm(out) == work['pcm'][:5 * info['a_chunk']]
+
+
 def test_rebuild_full_clip_without_moov(work):
     info = work['info']
     strip_moov(work['victim'], info)

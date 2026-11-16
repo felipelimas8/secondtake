@@ -30,7 +30,13 @@ from .i18n import L, Join, msg, t as tr
 HDR = 262144                 # ftyp + uuid + free + cabeçalho mdat (layout XAVC S)
 MDAT_POS = HDR - 16          # 262128
 TAIL_SCAN = 16_000_000       # bytes lidos do fim procurando o moov
-VIDEO_EXT = ('.mp4', '.mov')
+VIDEO_EXT = ('.mp4', '.mov', '.rsv')   # .RSV: arquivo temporário da Sony (gravação interrompida)
+
+
+def out_ext(name: str) -> str:
+    """Extensão do arquivo recuperado: .RSV vira .MP4 (é um XAVC S sem índice)."""
+    ext = os.path.splitext(name)[1]
+    return '.MP4' if ext.lower() == '.rsv' else ext
 
 OK = 'OK'
 HEADER = 'CABECALHO_DANIFICADO'
@@ -394,6 +400,8 @@ def diagnose(path: str) -> Clip:
     if m is None:
         c.status = NO_MOOV
         c.detail = L('diag.no_moov')
+        if path.lower().endswith('.rsv'):
+            c.detail = L('diag.rsv')
         c.extra['meta'] = read_meta(path, b'')
         return c
     c.moov_pos, moov = m
@@ -585,7 +593,7 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
     if mode == 'reconstruir':
         from . import rebuild as rb
         p = getattr(c, '_plan', None) or plan_rebuild(c, [c.reference])
-        dst = os.path.join(out_dir, f'{stem}_RECONSTRUIDO{ext}')
+        dst = os.path.join(out_dir, f'{stem}_RECONSTRUIDO{out_ext(c.name)}')
         rb.write(c.path, p, dst, chunk_cb)
         c.output = dst
         return dst
@@ -594,7 +602,7 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
     hdr[HDR - 8:HDR] = struct.pack('>Q', c.moov_pos - MDAT_POS)
     os.makedirs(out_dir, exist_ok=True)
     stem, ext = os.path.splitext(c.name)
-    dst = os.path.join(out_dir, f'{stem}_REPARADO{ext}')
+    dst = os.path.join(out_dir, f'{stem}_REPARADO{out_ext(c.name)}')
     copied = 0
     with open(c.path, 'rb') as src, open(dst, 'wb') as out:
         src.seek(HDR)

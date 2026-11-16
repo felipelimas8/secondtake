@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.9.3 — 2026-11-16
+- **Arquivos .RSV**: o app passa a aceitar direto o arquivo temporário que as câmeras Sony deixam quando a gravação é interrompida (bateria, cartão removido, superaquecimento). Ele aparece como "Sem índice" e sai reconstruído como `_RECONSTRUIDO.MP4`. Funciona na análise de pasta, na escolha de arquivos e no arrastar e soltar.
+
 ## 0.9.2 — 2026-11-16
 - Instalador do Mac: atalho **Abrir Ajustes de Segurança**, que abre direto Privacidade e Segurança para clicar em "Abrir Mesmo Assim".
 - README com imagem de capa.

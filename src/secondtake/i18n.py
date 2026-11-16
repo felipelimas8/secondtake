@@ -38,6 +38,8 @@ CATALOG: dict[str, tuple[str, str]] = {
     # ---- diagnóstico (core)
     'diag.empty_file': ('arquivo com 0 bytes', 'file is 0 bytes'),
     'diag.zero_start': ('início zerado', 'start of file is zeroed'),
+    'diag.rsv': ('arquivo RSV: gravação interrompida, sem índice (moov)',
+                 'RSV file: interrupted recording, no index (moov)'),
     'diag.no_moov': ('índice (moov) ausente — gravação interrompida',
                      'index (moov) missing — interrupted recording'),
     'diag.bad_moov': ('moov ilegível: {err}', 'unreadable moov: {err}'),
