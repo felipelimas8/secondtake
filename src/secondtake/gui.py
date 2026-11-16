@@ -19,7 +19,7 @@ from tkinter import filedialog, messagebox, ttk
 
 import customtkinter as ctk
 
-from . import __version__, core, i18n
+from . import __version__, core, i18n, updater
 from .i18n import L, msg, t
 
 REPO_URL = 'https://github.com/felipelimas8/secondtake'
@@ -120,10 +120,12 @@ class App(ctk.CTk):
         self.status_text = L('app.ready')
         self.subtitle_text = L('app.tagline', v=__version__)
         self._mode = None
+        self.update_info = None
         self._style_ttk()
         self._build()
         self._install_menu()
         self.after(100, self._poll)
+        self.after(2500, lambda: self.check_updates(manual=False))
 
     # ------------------------------------------------------------ idioma
     def set_language(self, pref: str):
@@ -154,7 +156,7 @@ class App(ctk.CTk):
         f = (FONT, 13)
         self.title(f'Second Take {__version__}')
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(3, weight=1)
+        self.grid_rowconfigure(4, weight=1)
 
         # cabeçalho
         head = ctk.CTkFrame(self, fg_color=PAL['card'], corner_radius=0, border_width=0)
@@ -180,9 +182,24 @@ class App(ctk.CTk):
         self.btn_files.grid(row=0, column=3, rowspan=2, padx=(6, 20))
         ctk.CTkFrame(self, height=1, fg_color=PAL['border'], corner_radius=0).grid(row=0, column=0, sticky='sew')
 
+        # faixa de atualização (só aparece quando há versão nova)
+        self.banner = ctk.CTkFrame(self, fg_color=PAL['select'], corner_radius=10)
+        self.banner.grid_columnconfigure(0, weight=1)
+        self.banner_lbl = ctk.CTkLabel(self.banner, text='', font=(FONT, 13), text_color=PAL['text'], anchor='w')
+        self.banner_lbl.grid(row=0, column=0, sticky='w', padx=(16, 8), pady=10)
+        ctk.CTkButton(self.banner, text=t('upd.skip'), width=10, height=28, font=(FONT, 12), fg_color='transparent',
+                      text_color=PAL['muted'], hover_color=PAL['card2'], command=self._update_skip).grid(
+            row=0, column=1, padx=2)
+        ctk.CTkButton(self.banner, text=t('upd.later'), width=10, height=28, font=(FONT, 12),
+                      command=self._update_later, **secondary()).grid(row=0, column=2, padx=4)
+        ctk.CTkButton(self.banner, text=t('upd.download'), width=90, height=28, font=(FONT, 12, 'bold'),
+                      fg_color=PAL['accent'], hover_color=PAL['accent_h'], command=self._update_download).grid(
+            row=0, column=3, padx=(4, 12))
+        self._show_banner()
+
         # métricas
         met = ctk.CTkFrame(self, fg_color='transparent')
-        met.grid(row=1, column=0, sticky='ew', padx=20, pady=(16, 8))
+        met.grid(row=2, column=0, sticky='ew', padx=20, pady=(16, 8))
         self.metric = {}
         for i, (key, label, color) in enumerate((('total', 'app.m_total', 'text'), ('ok', 'app.m_ok', 'ok'),
                                                  ('fix', 'app.m_fix', 'warn'),
@@ -199,7 +216,7 @@ class App(ctk.CTk):
 
         # filtros
         flt = ctk.CTkFrame(self, fg_color='transparent')
-        flt.grid(row=2, column=0, sticky='ew', padx=20, pady=(4, 8))
+        flt.grid(row=3, column=0, sticky='ew', padx=20, pady=(4, 8))
         flt.grid_columnconfigure(1, weight=1)
         self.seg = ctk.CTkSegmentedButton(flt, values=[t('app.view_bad'), t('app.view_all')],
                                           command=self._on_view, font=(FONT, 12), height=30)
@@ -213,7 +230,7 @@ class App(ctk.CTk):
         # tabela
         self.body = ctk.CTkFrame(self, fg_color=PAL['card'], corner_radius=10, border_width=1,
                                  border_color=PAL['border'])
-        self.body.grid(row=3, column=0, sticky='nsew', padx=20)
+        self.body.grid(row=4, column=0, sticky='nsew', padx=20)
         self.body.grid_columnconfigure(0, weight=1)
         self.body.grid_rowconfigure(0, weight=1)
         cols = ('status', 'action', 'audio', 'size', 'ref', 'detail')
@@ -251,8 +268,8 @@ class App(ctk.CTk):
 
         # rodapé
         foot = ctk.CTkFrame(self, fg_color=PAL['card'], corner_radius=0)
-        foot.grid(row=4, column=0, sticky='ew', pady=(14, 0))
-        ctk.CTkFrame(self, height=1, fg_color=PAL['border'], corner_radius=0).grid(row=4, column=0, sticky='new',
+        foot.grid(row=5, column=0, sticky='ew', pady=(14, 0))
+        ctk.CTkFrame(self, height=1, fg_color=PAL['border'], corner_radius=0).grid(row=5, column=0, sticky='new',
                                                                                    pady=(14, 0))
         foot.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(foot, text=t('app.output'), font=(FONT, 12), text_color=PAL['muted']).grid(
@@ -338,6 +355,12 @@ class App(ctk.CTk):
         bar = tk.Menu(self)
         self._lang_var = tk.StringVar(value=i18n.preference())
         if sys.platform == 'darwin':
+            # menu do app (Second Take): itens entram logo abaixo de "Sobre o Second Take"
+            app_menu = tk.Menu(bar, name='apple', tearoff=0)
+            app_menu.add_command(label=t('upd.menu'), command=lambda: self.check_updates(manual=True))
+            app_menu.add_separator()
+            bar.add_cascade(menu=app_menu)
+        if sys.platform == 'darwin':
             self.createcommand('tkAboutDialog', self.about)
             self.createcommand('tk::mac::ShowPreferences', self.preferences)
             self.createcommand('::tk::mac::ShowHelp', lambda: webbrowser.open(REPO_URL))
@@ -355,6 +378,9 @@ class App(ctk.CTk):
         help_menu.add_command(label=t('about.help_page'), command=lambda: webbrowser.open(REPO_URL))
         help_menu.add_command(label=t('about.issue'), command=lambda: webbrowser.open(ISSUES_URL))
         help_menu.add_command(label=t('about.install'), command=self._copy_install_help)
+        if sys.platform != 'darwin':
+            help_menu.add_separator()
+            help_menu.add_command(label=t('upd.menu'), command=lambda: self.check_updates(manual=True))
         bar.add_cascade(label=t('about.menu_help'), menu=help_menu)
         self.config(menu=bar)
 
@@ -365,6 +391,41 @@ class App(ctk.CTk):
 
     def preferences(self):
         PrefsDialog(self)
+
+    # ------------------------------------------------------------ atualizações
+    def check_updates(self, manual: bool):
+        if manual:
+            self._set_status(L('upd.checking'))
+
+        def work():
+            try:
+                self.q.put(('update', updater.check(force=manual), manual, None))
+            except Exception as e:
+                self.q.put(('update', None, manual, e))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_banner(self):
+        info = self.update_info
+        if info:
+            self.banner_lbl.configure(text=f"{t('upd.available', v=info['version'])}  {t('upd.current', v=__version__)}")
+            self.banner.grid(row=1, column=0, sticky='ew', padx=20, pady=(14, 0))
+        else:
+            self.banner.grid_forget()
+
+    def _update_download(self):
+        info = self.update_info
+        if info:
+            webbrowser.open(info.get('dmg') or info['page'])
+        self._update_later()
+
+    def _update_later(self):
+        self.update_info = None
+        self._show_banner()
+
+    def _update_skip(self):
+        if self.update_info:
+            updater.skip(self.update_info['version'])
+        self._update_later()
 
     def about(self):
         AboutDialog(self)
@@ -601,6 +662,18 @@ class App(ctk.CTk):
                     self._set_status(L('app.done_fix', n=m[1], report=m[3], path=m[2]))
                     self.prog.set(1)
                     self._set_busy(False)
+                elif k == 'update':
+                    _, info, manual, err = m
+                    if manual:
+                        self._set_status(self.status_text if not isinstance(self.status_text, L)
+                                         or self.status_text.key != 'upd.checking' else L('app.ready'))
+                        if err is not None:
+                            messagebox.showwarning('Second Take', t('upd.failed', err=err))
+                        elif info is None:
+                            messagebox.showinfo('Second Take', t('upd.up_to_date', v=__version__))
+                    if info:
+                        self.update_info = info
+                        self._show_banner()
                 elif k == 'error':
                     self.busy = False
                     messagebox.showerror('Second Take', str(m[1]))
@@ -637,7 +710,7 @@ class PrefsDialog(_Dialog):
     """Ajustes (⌘,): idioma."""
 
     def __init__(self, app):
-        super().__init__(app, t('prefs.title'), '480x200')
+        super().__init__(app, t('prefs.title'), '500x260')
         f = ctk.CTkFrame(self, fg_color='transparent')
         f.pack(fill='both', expand=True, padx=24, pady=20)
         f.grid_columnconfigure(1, weight=1)
@@ -650,8 +723,14 @@ class PrefsDialog(_Dialog):
         self.choice.grid(row=0, column=1, sticky='w')
         ctk.CTkLabel(f, text=t('prefs.lang_hint'), font=(FONT, 11), text_color=PAL['muted'], anchor='w',
                      justify='left', wraplength=360).grid(row=1, column=0, columnspan=2, sticky='w', pady=(10, 0))
+        ctk.CTkLabel(f, text=t('prefs.updates'), font=(FONT, 13), text_color=PAL['text'], anchor='w').grid(
+            row=2, column=0, sticky='w', padx=(0, 16), pady=(18, 0))
+        self.auto_upd = tk.BooleanVar(value=updater.auto_enabled())
+        ctk.CTkCheckBox(f, text=t('prefs.auto_update'), variable=self.auto_upd, font=(FONT, 12),
+                        text_color=PAL['text'], command=lambda: updater.set_auto(self.auto_upd.get())).grid(
+            row=2, column=1, sticky='w', pady=(18, 0))
         ctk.CTkButton(f, text=t('about.close'), width=90, height=32, font=(FONT, 12), command=self.destroy,
-                      fg_color=PAL['accent'], hover_color=PAL['accent_h']).grid(row=2, column=1, sticky='e',
+                      fg_color=PAL['accent'], hover_color=PAL['accent_h']).grid(row=3, column=1, sticky='e',
                                                                                  pady=(18, 0))
 
     def _pick(self, name):

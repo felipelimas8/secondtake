@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.7.0 — 2026-11-16
+- **Verificação de atualizações**: ao abrir (no máximo uma vez por dia) o app consulta a última versão oficial no GitHub e, se houver uma nova, mostra uma faixa com **Baixar** (abre o `.dmg` novo), **Agora não** e **Pular esta versão**.
+- **Second Take > Verificar atualizações…** para checar na hora.
+- Ajustes (⌘,): opção para desligar a verificação automática.
+- A consulta é anônima (API pública do GitHub) e só considera versões oficiais `v*`, nunca a prévia `main-build`.
+
 ## 0.6.0 — 2026-11-16
 - **Português e inglês**, no menu **Idioma** da barra de menus ou em **Ajustes…** (⌘,). O padrão é **Automático**, que segue o idioma do macOS; escolher um idioma deixa ele fixo. A troca é na hora (inclusive dos diagnósticos já feitos).
 - Diagnósticos, relatório CSV e linha de comando (`--lang pt|en`) também nos dois idiomas. No CSV, a coluna `status` mantém o código fixo para scripts, e `status_label` traz o nome traduzido.

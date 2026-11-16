@@ -33,7 +33,7 @@ O app ainda não é notarizado pela Apple, então na primeira abertura o macOS a
 - **Ajustes do Sistema > Privacidade e Segurança:** role até o fim, clique em **Abrir Mesmo Assim** e confirme.
 - **Terminal:** `xattr -cr "/Applications/Second Take.app"`
 
-Isso só é necessário uma vez. Para mandar a um colega, use **Sobre o Second Take > Como instalar em outro Mac**: o app copia o link e as instruções prontos para colar.
+Isso só é necessário uma vez. Quando sair uma versão nova, o próprio app avisa (no máximo uma vez por dia, desligável em Ajustes) e o botão **Baixar** abre o instalador novo. Para mandar a um colega, use **Sobre o Second Take > Como instalar em outro Mac**: o app copia o link e as instruções prontos para colar.
 
 **Pelo código:**
 ```bash
