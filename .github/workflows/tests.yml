@@ -1,28 +1,30 @@
 name: tests
 
+# Testes rápidos em Linux a cada push e pull request.
+# O macOS roda os mesmos testes no workflow "build" (que também gera o .dmg),
+# para não ocupar várias máquinas macOS por push.
+
 on:
   push:
     branches: [main]
   pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   pytest:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
         python: ["3.10", "3.13"]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: ffmpeg (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y ffmpeg
-      - name: ffmpeg (macOS)
-        if: runner.os == 'macOS'
-        run: brew install ffmpeg
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg python3-tk
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest -v

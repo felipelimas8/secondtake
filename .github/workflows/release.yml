@@ -18,10 +18,35 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
-      - run: brew install ffmpeg
+      - run: brew install ffmpeg create-dmg
       - run: python -m pip install -e ".[dev]" && python -m pytest -q
       - run: scripts/build_macos.sh
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/SecondTake-*-macOS-*.zip
+          files: |
+            dist/SecondTake-*-macOS-*.dmg
+            dist/SecondTake-*-macOS-*.zip
           generate_release_notes: true
+
+  windows-app:
+    needs: macos-app          # anexa à release criada pelo job do macOS
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest -q
+      - name: Inno Setup
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) { choco install innosetup -y --no-progress }
+      - name: Build
+        shell: pwsh
+        run: .\scripts\build_windows.ps1
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/SecondTake-*-Windows-x64-Setup.exe
+            dist/SecondTake-*-Windows-x64-portatil.zip
