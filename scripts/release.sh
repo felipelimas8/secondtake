@@ -44,7 +44,9 @@ else
 fi
 ok "canal $CHANNEL · versão $VERSION · tag $TAG"
 
-git fetch -q origin --tags
+# só o branch: as tags móveis main-build/beta-build são recriadas a cada push e
+# fariam o `git fetch --tags` falhar ("would clobber existing tag")
+git fetch -q origin "$BRANCH" || fail "não consegui falar com o GitHub (git fetch origin $BRANCH)"
 if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null || git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
   fail "a tag $TAG já existe: suba a versão em src/secondtake/__init__.py (nunca reutilize uma tag)"
 fi
