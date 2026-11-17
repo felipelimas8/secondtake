@@ -4,6 +4,10 @@
 - **Second Take Beta**: novo canal de testes, publicado a partir do branch `beta`. É um app separado ("Second Take Beta", ícone com faixa BETA, bundle id, ajustes, log e entrada no menu Iniciar próprios), que pode ficar instalado ao lado da versão estável sem substituí-la.
 - O Beta só avisa de novas betas (pré-releases `vX.Y.Z-beta.N`); a versão estável continua ignorando pré-releases.
 - Build automático do branch `beta` na pré-release `beta-build`.
+- **Manter o nome original** (Ajustes › Saída, desligado por padrão; CLI `--keep-names`): a saída sai como `C0001.MP4`, sem `_REPARADO`/`_RECONSTRUIDO`, para o relink direto no Resolve ou Premiere. O app recusa gravar na pasta dos originais nesse modo, para nunca substituí-los.
+- **XML de câmera junto da saída** também na reconstrução (antes só no reparo de cabeçalho), com o nome casando com o clipe novo (`C0001M01.XML`), para o Resolve/Catalyst lerem timecode, modelo e espaço de cor.
+- Mac: o item **Sobre** aparece sempre no menu do app; a janela Sobre do Beta se chama "Sobre o Second Take Beta".
+- `scripts/release.sh`: confere branch × canal, versão, CHANGELOG, tag nova, sincronia com o GitHub e testes antes de publicar.
 - Base para o suporte a outras câmeras além da Sony (em desenvolvimento).
 
 ## 0.9.3 — 2026-11-16

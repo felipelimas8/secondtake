@@ -563,10 +563,39 @@ def scan_files(paths: list[str], progress=None, max_refs: int = 30) -> list[Clip
 
 # ---------------------------------------------------------------- reparo
 
-def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
+def out_name(stem: str, tag: str, ext: str, keep_names: bool = False) -> str:
+    """Nome do arquivo de saída: `C0001_REPARADO.MP4` ou, com keep_names, `C0001.MP4`
+    (mesmo nome do original, para o relink no Resolve/Premiere)."""
+    return f'{stem}{ext}' if keep_names else f'{stem}_{tag}{ext}'
+
+
+def copy_sidecar(src_path: str, out_dir: str, out_stem: str) -> str | None:
+    """Copia o XML de câmera da Sony (C0001M01.XML) para junto da saída, com o nome casando
+    com o clipe novo, para o Resolve/Catalyst lerem timecode, modelo e espaço de cor."""
+    base = os.path.splitext(src_path)[0]
+    for suf in ('M01.XML', 'M01.xml'):
+        xml = base + suf
+        if os.path.isfile(xml):
+            dst = os.path.join(out_dir, out_stem + 'M01.XML')
+            shutil.copy2(xml, dst)
+            return dst
+    return None
+
+
+def same_folder(src_path: str, out_dir: str) -> bool:
+    try:
+        return os.path.samefile(os.path.dirname(os.path.abspath(src_path)), out_dir)
+    except OSError:
+        return False
+
+
+def repair(c: Clip, out_dir: str, chunk_cb=None, keep_names: bool = False) -> str:
     if c.status not in REPAIRABLE:
         raise ValueError(L('err.not_repairable', name=c.name, status=c.status))
     os.makedirs(out_dir, exist_ok=True)
+    if keep_names and same_folder(c.path, out_dir):
+        # com o mesmo nome, a saída na pasta do original o substituiria: nunca
+        raise ValueError(L('err.same_folder', name=c.name))
     stem, ext = os.path.splitext(c.name)
     mode = c.extra.get('mode', 'cabecalho' if c.status == HEADER else 'reconstruir')
     if mode == 'extrair':
@@ -593,8 +622,9 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
     if mode == 'reconstruir':
         from . import rebuild as rb
         p = getattr(c, '_plan', None) or plan_rebuild(c, [c.reference])
-        dst = os.path.join(out_dir, f'{stem}_RECONSTRUIDO{out_ext(c.name)}')
+        dst = os.path.join(out_dir, out_name(stem, 'RECONSTRUIDO', out_ext(c.name), keep_names))
         rb.write(c.path, p, dst, chunk_cb)
+        copy_sidecar(c.path, out_dir, os.path.splitext(os.path.basename(dst))[0])
         c.output = dst
         return dst
     with open(c.reference, 'rb') as f:
@@ -602,7 +632,7 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
     hdr[HDR - 8:HDR] = struct.pack('>Q', c.moov_pos - MDAT_POS)
     os.makedirs(out_dir, exist_ok=True)
     stem, ext = os.path.splitext(c.name)
-    dst = os.path.join(out_dir, f'{stem}_REPARADO{out_ext(c.name)}')
+    dst = os.path.join(out_dir, out_name(stem, 'REPARADO', out_ext(c.name), keep_names))
     copied = 0
     with open(c.path, 'rb') as src, open(dst, 'wb') as out:
         src.seek(HDR)
@@ -615,10 +645,7 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
             copied += len(b)
             if chunk_cb:
                 chunk_cb(copied, c.size)
-    for ext_xml in ('M01.XML',):
-        xml = os.path.splitext(c.path)[0] + ext_xml
-        if os.path.exists(xml):
-            shutil.copy2(xml, os.path.join(out_dir, f'{stem}_REPARADO{ext_xml}'))
+    copy_sidecar(c.path, out_dir, os.path.splitext(os.path.basename(dst))[0])
     c.output = dst
     return dst
 

@@ -724,6 +724,10 @@ class App(ctk.CTk, _DnDBase):
         if free < total * 1.05:
             messagebox.showerror(APP_NAME, t('app.no_space', need=human(total), free=human(free)))
             return
+        keep = keep_names_enabled()
+        if keep and any(core.same_folder(c.path, out) for c in todo):
+            messagebox.showerror(APP_NAME, t('app.keep_same_folder'))
+            return
         if not messagebox.askyesno(APP_NAME, t('app.confirm', n=len(todo), size=human(total), path=out)):
             return
         self._set_busy(True)
@@ -735,7 +739,7 @@ class App(ctk.CTk, _DnDBase):
             for c in todo:
                 try:
                     self.q.put(('fix_start', c.name))
-                    core.repair(c, out, lambda b, n, base=done: self.q.put(('fix', base + b, total)))
+                    core.repair(c, out, lambda b, n, base=done: self.q.put(('fix', base + b, total)), keep_names=keep)
                     if verify:
                         self.q.put(('verify', c.name))
                         core.verify(c)
@@ -854,11 +858,15 @@ class _Dialog(ctk.CTkToplevel):
         self.geometry(f'+{max(x, 0)}+{max(y, 0)}')
 
 
+def keep_names_enabled() -> bool:
+    return bool(i18n.load_config().get('keep_names', False))
+
+
 class PrefsDialog(_Dialog):
-    """Ajustes (⌘,): idioma."""
+    """Ajustes (⌘,): idioma, atualizações e nomes de saída."""
 
     def __init__(self, app):
-        super().__init__(app, t('prefs.title'), '500x260')
+        super().__init__(app, t('prefs.title'), '520x330')
         f = ctk.CTkFrame(self, fg_color='transparent')
         f.pack(fill='both', expand=True, padx=24, pady=20)
         f.grid_columnconfigure(1, weight=1)
@@ -877,8 +885,17 @@ class PrefsDialog(_Dialog):
         ctk.CTkCheckBox(f, text=t('prefs.auto_update'), variable=self.auto_upd, font=(FONT, 12),
                         text_color=PAL['text'], command=lambda: updater.set_auto(self.auto_upd.get())).grid(
             row=2, column=1, sticky='w', pady=(18, 0))
+        ctk.CTkLabel(f, text=t('prefs.output'), font=(FONT, 13), text_color=PAL['text'], anchor='w').grid(
+            row=3, column=0, sticky='w', padx=(0, 16), pady=(18, 0))
+        self.keep = tk.BooleanVar(value=keep_names_enabled())
+        ctk.CTkCheckBox(f, text=t('prefs.keep_names'), variable=self.keep, font=(FONT, 12),
+                        text_color=PAL['text'],
+                        command=lambda: i18n.save_config(keep_names=bool(self.keep.get()))).grid(
+            row=3, column=1, sticky='w', pady=(18, 0))
+        ctk.CTkLabel(f, text=t('prefs.keep_hint'), font=(FONT, 11), text_color=PAL['muted'], anchor='w',
+                     justify='left', wraplength=300).grid(row=4, column=1, sticky='w', pady=(6, 0))
         ctk.CTkButton(f, text=t('about.close'), width=90, height=32, font=(FONT, 12), command=self.destroy,
-                      fg_color=PAL['accent'], hover_color=PAL['accent_h']).grid(row=3, column=1, sticky='e',
+                      fg_color=PAL['accent'], hover_color=PAL['accent_h']).grid(row=5, column=1, sticky='e',
                                                                                  pady=(18, 0))
 
     def _pick(self, name):
@@ -891,7 +908,7 @@ class AboutDialog(_Dialog):
     """Janela Sobre: versão, o que faz, autoria, licença e ambiente."""
 
     def __init__(self, app):
-        super().__init__(app, t('about.title'), '600x650')
+        super().__init__(app, t('about.title').replace('Second Take', APP_NAME), '600x650')
         f = ctk.CTkFrame(self, fg_color='transparent')
         f.pack(fill='both', expand=True, padx=28, pady=22)
         icon = app_icon(88)

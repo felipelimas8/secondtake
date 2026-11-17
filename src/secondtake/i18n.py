@@ -238,6 +238,20 @@ CATALOG: dict[str, tuple[str, str]] = {
     'prefs.auto': ('Automático (idioma do sistema)', 'Automatic (system language)'),
     'prefs.updates': ('Atualizações', 'Updates'),
     'prefs.auto_update': ('Verificar atualizações automaticamente', 'Check for updates automatically'),
+    'prefs.output': ('Saída', 'Output'),
+    'prefs.keep_names': ('Manter o nome original dos clipes', 'Keep the original clip names'),
+    'prefs.keep_hint': ('Sem _REPARADO/_RECONSTRUIDO no nome, para o relink no Resolve ou Premiere. '
+                        'A pasta de saída precisa ser diferente da pasta dos originais.',
+                        'No _REPARADO/_RECONSTRUIDO suffix, so Resolve or Premiere can relink. '
+                        'The output folder must differ from the originals folder.'),
+    'err.same_folder': ('{name}: com "manter o nome original", a saída não pode ficar na mesma pasta do original.',
+                        '{name}: with "keep the original names", the output can\'t be in the same folder as the original.'),
+    'app.keep_same_folder': ('Com "manter o nome original" ligado, a pasta de saída não pode ser a mesma dos clipes '
+                             'originais (eles seriam substituídos). Escolha outra pasta de saída.',
+                             'With "keep the original names" on, the output folder can\'t be the originals folder '
+                             '(they would be overwritten). Choose another output folder.'),
+    'cli.keep_names': ('mantém o nome original dos clipes (sem _REPARADO/_RECONSTRUIDO)',
+                       'keep the original clip names (no _REPARADO/_RECONSTRUIDO suffix)'),
     'upd.menu': ('Verificar atualizações…', 'Check for Updates…'),
     'upd.available': ('Nova versão {v} disponível', 'Version {v} is available'),
     'upd.current': ('— você está na {v}.', '— you have {v}.'),

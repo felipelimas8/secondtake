@@ -276,3 +276,44 @@ def test_originals_are_never_modified(work):
     before = hashlib.md5(open(work['victim'], 'rb').read()).hexdigest()
     cli.main(['repair', work['dir'], '-o', work['out']])
     assert hashlib.md5(open(work['victim'], 'rb').read()).hexdigest() == before
+
+
+# ---------------------------------------------------------------- nomes de saída e XML de câmera
+
+XML = '<?xml version="1.0"?><NonRealTimeMeta><Device manufacturer="Sony" modelName="ILME-FX3"/></NonRealTimeMeta>'
+
+
+def test_keep_names_and_camera_xml_header(work):
+    scramble(work['victim'], 0, core.HDR, seed=1)
+    with open(os.path.join(work['dir'], 'C0002M01.XML'), 'w') as f:
+        f.write(XML)
+    c = by_name(core.scan(work['dir']), 'C0002.MP4')
+    out = core.repair(c, work['out'], keep_names=True)
+    assert os.path.basename(out) == 'C0002.MP4'                      # mesmo nome: relink direto
+    assert open(os.path.join(work['out'], 'C0002M01.XML')).read() == XML
+    assert frame_md5s(out)[0] == work['golden']
+
+
+def test_default_names_copy_xml_on_rebuild(work):
+    strip_moov(work['victim'], work['info'])
+    with open(os.path.join(work['dir'], 'C0002M01.XML'), 'w') as f:
+        f.write(XML)
+    c = by_name(core.scan(work['dir']), 'C0002.MP4')
+    out = core.repair(c, work['out'])
+    assert os.path.basename(out) == 'C0002_RECONSTRUIDO.MP4'
+    assert os.path.isfile(os.path.join(work['out'], 'C0002_RECONSTRUIDOM01.XML'))
+
+
+def test_keep_names_refuses_originals_folder(work):
+    scramble(work['victim'], 0, core.HDR, seed=1)
+    before = open(work['victim'], 'rb').read()
+    c = by_name(core.scan(work['dir']), 'C0002.MP4')
+    with pytest.raises(ValueError):
+        core.repair(c, work['dir'], keep_names=True)
+    assert open(work['victim'], 'rb').read() == before                 # original intacto
+
+
+def test_cli_keep_names(work):
+    scramble(work['victim'], 0, core.HDR, seed=1)
+    cli.main(['repair', work['dir'], '-o', work['out'], '--keep-names'])
+    assert os.path.isfile(os.path.join(work['out'], 'C0002.MP4'))

@@ -41,6 +41,7 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument('targets', nargs='+', help=t('cli.targets'))
     r.add_argument('-o', '--output', required=True, help=t('cli.output'))
     r.add_argument('--verify', action='store_true', help=t('cli.verify'))
+    r.add_argument('--keep-names', action='store_true', help=t('cli.keep_names'))
     r.add_argument('--mode', choices=['auto', 'cabecalho', 'reconstruir', 'extrair'], default='auto',
                    help=t('cli.mode'))
     r.add_argument('--ref', help=t('cli.ref'))
@@ -93,7 +94,7 @@ def main(argv: list[str] | None = None) -> int:
             mode = c.extra.get('mode')
             print(t('cli.repairing', name=c.name, mode=t(f'mode.{mode}') if mode else '?',
                     ref=os.path.basename(c.reference)), flush=True)
-            core.repair(c, a.output)
+            core.repair(c, a.output, keep_names=a.keep_names)
             if a.verify:
                 print('   ', core.verify(c), flush=True)
             elif c.verify:
