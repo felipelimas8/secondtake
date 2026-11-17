@@ -2,6 +2,7 @@
 
 ## 0.9.8 — 2026-11-17
 - **Windows de volta**: a 0.9.7 saiu só para Mac, porque um teste novo usava um nome de pasta inválido no Windows (`|`) e derrubou o build do Windows. O teste foi corrigido; o app em si não muda em relação à 0.9.7.
+- **Build do Mac**: `scripts/build_macos.sh` passa a montar e assinar tudo numa pasta temporária no disco interno, e funciona com o projeto num SSD exFAT ou numa pasta do iCloud. A assinatura é feita de dentro para fora (bibliotecas, frameworks e por último o app), sem o `codesign --deep`, e conferida com `codesign --verify --strict`.
 
 ## 0.9.7 — 2026-11-17
 - **Sem arquivo cortado com nome de pronto**: o resultado é gravado primeiro num arquivo oculto `.part` e só recebe o nome final (`_REPARADO`, `_RECONSTRUIDO`, `_EXTRAIDO`) depois de gravado por inteiro no disco. Se o disco encher ou o SSD desconectar no meio, o `.part` é apagado e nada fica com cara de concluído.

@@ -1,25 +1,37 @@
 #!/usr/bin/env bash
 # Gera "Second Take.app", o instalador .dmg e um .zip em dist/.
 # Uso: scripts/build_macos.sh [--install]   (--install copia o app para /Applications)
+#
+# Todo o trabalho (PyInstaller, Info.plist, assinatura, .zip e .dmg) acontece numa pasta
+# temporária no disco interno (APFS). Assim o build funciona com o projeto num SSD exFAT,
+# numa pasta do iCloud ou em qualquer volume que acrescente atributos/arquivos "._*" e
+# quebre o codesign. Só os artefatos finais são copiados para dist/.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+ROOT="$PWD"
 
-case "$PWD" in
-  "$HOME/Documents"*|"$HOME/Desktop"*|*"Mobile Documents"*)
-    echo "Aviso: pastas sincronizadas com o iCloud quebram a assinatura do app." >&2
-    echo "       Clone o repositório fora delas (ex.: ~/Dev/second-take)." >&2 ;;
-esac
+APP_NAME="Second Take"
+BUNDLE_ID="br.com.super8.secondtake"
+SIGN_ID="-"   # assinatura ad-hoc
 
 python3 -m pip install -q -e ".[build]"
 VERSION=$(python3 -c "import secondtake; print(secondtake.__version__)")
 ARCH=$(uname -m)
+BASENAME="SecondTake-$VERSION-macOS-$ARCH"
 
-# ícone: assets/icon_1024.png -> build/SecondTake.icns
-mkdir -p build
-ICNS=build/SecondTake.icns
+# ---------------------------------------------------------------- pasta de trabalho no disco interno
+WORK=$(mktemp -d /tmp/secondtake-build.XXXXXX)
+WORK=$(cd "$WORK" && pwd -P)   # /tmp -> /private/tmp
+trap 'rm -rf "$WORK"' EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+echo "Pasta de trabalho: $WORK"
+
+# ---------------------------------------------------------------- ícone
+ICNS="$WORK/SecondTake.icns"
 if [ -f assets/icon_1024.png ]; then
-  SET=build/SecondTake.iconset
-  rm -rf "$SET" && mkdir -p "$SET"
+  SET="$WORK/SecondTake.iconset"
+  mkdir -p "$SET"
   for s in 16 32 128 256 512; do
     sips -z $s $s assets/icon_1024.png --out "$SET/icon_${s}x${s}.png" >/dev/null
     sips -z $((s*2)) $((s*2)) assets/icon_1024.png --out "$SET/icon_${s}x${s}@2x.png" >/dev/null
@@ -29,14 +41,18 @@ fi
 ICON=()
 [ -f "$ICNS" ] && ICON=(--icon "$ICNS")
 
+# ---------------------------------------------------------------- PyInstaller (work, dist e .spec no disco interno)
 python3 -m PyInstaller --windowed --noconfirm --clean \
-  --name "Second Take" --paths src --collect-submodules secondtake \
+  --name "$APP_NAME" --paths "$ROOT/src" --collect-submodules secondtake \
   --collect-data customtkinter --collect-data secondtake --collect-all tkinterdnd2 \
-  --osx-bundle-identifier br.com.super8.secondtake \
-  ${ICON[@]+"${ICON[@]}"} scripts/secondtake_app.py
+  --osx-bundle-identifier "$BUNDLE_ID" \
+  --workpath "$WORK/pyi-build" --distpath "$WORK/dist" --specpath "$WORK" \
+  ${ICON[@]+"${ICON[@]}"} "$ROOT/scripts/secondtake_app.py"
 
-APP="dist/Second Take.app"
+APP="$WORK/dist/$APP_NAME.app"
 PLIST="$APP/Contents/Info.plist"
+
+# ---------------------------------------------------------------- Info.plist
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string 'Copyright © 2026 Super8 Produtora · GPL v3'" "$PLIST" 2>/dev/null \
@@ -63,37 +79,72 @@ done
 /usr/libexec/PlistBuddy -c "Add :CFBundleLocalizations:1 string pt-BR" "$PLIST"
 plutil -lint "$PLIST" "$RES/en.lproj/InfoPlist.strings" "$RES/pt-BR.lproj/InfoPlist.strings" >/dev/null
 
+# ---------------------------------------------------------------- limpeza antes de assinar
+# Arquivos "._*" (AppleDouble) vêm de dados lidos de exFAT/NTFS/SMB; atributos estendidos
+# (FinderInfo, quarentena, iCloud) fazem o codesign recusar o bundle.
+find "$APP" -name '._*' -type f -delete
+find "$APP" -name '.DS_Store' -type f -delete
 xattr -cr "$APP"
-codesign -s - --force --deep "$APP"
 
-# .zip (para quem prefere)
-(cd dist && ditto -c -k --keepParent "Second Take.app" "SecondTake-$VERSION-macOS-$ARCH.zip")
+# ---------------------------------------------------------------- assinatura de dentro para fora (sem --deep)
+sign() { codesign --force --sign "$SIGN_ID" --timestamp=none "$@"; }
 
-# instalador .dmg: janela com fundo, ícone do app, atalho para Aplicativos e "Como abrir.txt"
-DMG="dist/SecondTake-$VERSION-macOS-$ARCH.dmg"
-rm -f "$DMG"
-STAGE=build/dmg
-rm -rf "$STAGE" && mkdir -p "$STAGE"
-cp -R "$APP" "$STAGE/"
+# lista caminhos do mais profundo para o mais raso (compatível com o Bash 3.2 do macOS)
+deepest_first() { awk -F/ '{ print NF "\t" $0 }' | sort -t "$(printf '\t')" -k1,1nr -k2 | cut -f2-; }
+
+MAIN_EXE="$APP/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$PLIST")"
+
+# 1) todo arquivo Mach-O (.dylib, .so, executáveis sem extensão), exceto o executável principal
+N_BIN=0
+while IFS= read -r f; do
+  [ "$f" = "$MAIN_EXE" ] && continue
+  case "$(file -b "$f")" in
+    *Mach-O*) sign "$f"; N_BIN=$((N_BIN+1)) ;;
+  esac
+done < <(find "$APP/Contents/Frameworks" "$APP/Contents/MacOS" "$APP/Contents/Resources" -type f 2>/dev/null | deepest_first)
+
+# 2) bundles aninhados (.framework, .bundle, .app…), dos mais internos para os externos
+N_BUNDLE=0
+while IFS= read -r b; do
+  sign "$b"; N_BUNDLE=$((N_BUNDLE+1))
+done < <(find "$APP/Contents" -type d \( -name '*.framework' -o -name '*.bundle' -o -name '*.app' -o -name '*.appex' -o -name '*.xpc' \) 2>/dev/null | deepest_first)
+
+# 3) por último, o próprio .app (assina o executável principal e sela os recursos)
+sign "$APP"
+echo "Assinados: $N_BIN binários, $N_BUNDLE bundles internos e o app"
+
+# --deep aqui é só na verificação (continua suportado); --strict pega symlinks e bundles inválidos
+codesign --verify --deep --strict "$APP"
+
+# ---------------------------------------------------------------- .zip e .dmg (gerados no disco interno)
+OUT="$WORK/out"
+mkdir -p "$OUT"
+(cd "$WORK/dist" && ditto -c -k --keepParent "$APP_NAME.app" "$OUT/$BASENAME.zip")
+
+DMG="$OUT/$BASENAME.dmg"
+STAGE="$WORK/dmg"
+mkdir -p "$STAGE"
+ditto "$APP" "$STAGE/$APP_NAME.app"
 cp "assets/Leia-me · Read me.txt" "$STAGE/"
+xattr -c "$STAGE/Leia-me · Read me.txt" 2>/dev/null || true
 # atalho que abre Ajustes do Sistema > Privacidade e Segurança (gerado aqui, no formato que o Finder lê)
 LINK="$STAGE/Abrir Ajustes de Segurança.webloc"
 /usr/libexec/PlistBuddy -c "Add :URL string x-apple.systempreferences:com.apple.preference.security?Security" "$LINK" >/dev/null
 if command -v create-dmg >/dev/null 2>&1; then
-  BG=assets/dmg_background.png
+  BG="$ROOT/assets/dmg_background.png"
   if [ -f assets/dmg_background@2x.png ]; then
-    tiffutil -cathidpicheck assets/dmg_background.png assets/dmg_background@2x.png -out build/dmg_background.tiff >/dev/null
-    BG=build/dmg_background.tiff
+    tiffutil -cathidpicheck assets/dmg_background.png assets/dmg_background@2x.png -out "$WORK/dmg_background.tiff" >/dev/null
+    BG="$WORK/dmg_background.tiff"
   fi
   VOLICON=()
   [ -f "$ICNS" ] && VOLICON=(--volicon "$ICNS")
   dmg() {
     create-dmg \
-      --volname "Second Take $VERSION" ${VOLICON[@]+"${VOLICON[@]}"} \
+      --volname "$APP_NAME $VERSION" ${VOLICON[@]+"${VOLICON[@]}"} \
       --background "$BG" \
       --window-pos 200 120 --window-size 680 620 \
       --icon-size 104 --text-size 13 \
-      --icon "Second Take.app" 170 200 --hide-extension "Second Take.app" \
+      --icon "$APP_NAME.app" 170 200 --hide-extension "$APP_NAME.app" \
       --app-drop-link 510 200 \
       --icon "Leia-me · Read me.txt" 600 52 \
       --icon "Abrir Ajustes de Segurança.webloc" 340 520 --hide-extension "Abrir Ajustes de Segurança.webloc" \
@@ -105,14 +156,28 @@ if command -v create-dmg >/dev/null 2>&1; then
 else
   echo "create-dmg não encontrado (brew install create-dmg): gerando DMG simples, sem layout." >&2
   ln -s /Applications "$STAGE/Aplicativos"
-  hdiutil create -volname "Second Take $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+  hdiutil create -volname "$APP_NAME $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 fi
-echo "OK: $APP"
-echo "    $DMG"
-echo "    dist/SecondTake-$VERSION-macOS-$ARCH.zip"
 
+# ---------------------------------------------------------------- instalar (a partir da cópia no disco interno)
 if [ "${1:-}" = "--install" ]; then
-  rm -rf "/Applications/Second Take.app"
-  cp -R "$APP" /Applications/
+  rm -rf "/Applications/$APP_NAME.app"
+  ditto "$APP" "/Applications/$APP_NAME.app"
   echo "Instalado em /Applications"
 fi
+
+# ---------------------------------------------------------------- copiar os artefatos finais para dist/
+mkdir -p dist
+cp "$OUT/$BASENAME.dmg" "$OUT/$BASENAME.zip" dist/
+rm -rf "dist/$APP_NAME.app"
+# exFAT/FAT não guardam symlinks nem atributos; se a cópia do .app não sair íntegra,
+# ela é descartada (o .dmg e o .zip continuam válidos: foram gerados no disco interno).
+if ditto "$APP" "dist/$APP_NAME.app" 2>/dev/null \
+   && codesign --verify --deep --strict "dist/$APP_NAME.app" 2>/dev/null; then
+  echo "OK: dist/$APP_NAME.app"
+else
+  rm -rf "dist/$APP_NAME.app" 2>/dev/null || true
+  echo "Aviso: este volume não guarda um .app assinado (exFAT/NTFS/iCloud); dist/ fica só com o .dmg e o .zip." >&2
+fi
+echo "    dist/$BASENAME.dmg"
+echo "    dist/$BASENAME.zip"
