@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.10 — 2026-11-17
+- **Tela de apresentação**: ao abrir, aparece uma tela com o ícone, o nome e a versão, nas cores do tema do sistema. Fica pelo menos 1,2 s na tela (sem somar ao tempo de carregamento) e some com um fade curto; um clique nela pula a espera.
+- **Título da janela**: só "Second Take". A versão continua no cabeçalho e no Sobre.
+
 ## 0.9.9 — 2026-11-17
 - **Prévia no Detalhes**: três quadros do clipe (10 %, 50 % e 90 %) no topo do painel, gerados em segundo plano pelo ffmpeg. Funciona com clipes íntegros, com cabeçalho danificado (os quadros são lidos direto pelo índice) e com o arquivo recuperado, que aparece logo depois do reparo. Em S-Log3 a imagem vem sem LUT, e o painel avisa.
 - **Datas do arquivo preservadas**: o recuperado fica com a data de modificação (e de acesso) do clipe original, então a ilha de edição ordena pela hora da filmagem e não pela hora do reparo.

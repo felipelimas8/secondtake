@@ -13,6 +13,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from tkinter import filedialog, messagebox, ttk
@@ -139,6 +140,32 @@ class App(ctk.CTk, _DnDBase):
         ctk.set_appearance_mode('system')
         ctk.set_default_color_theme('blue')
         super().__init__(fg_color=PAL['bg'])
+        # tela de apresentação enquanto a janela é montada (some assim que ela fica pronta)
+        self.withdraw()
+        splash = None
+        if not os.environ.get('SECONDTAKE_NO_SPLASH'):
+            try:
+                splash = Splash(self)
+            except Exception:
+                splash = None
+        try:
+            self._init_app()
+        except Exception:
+            if splash is not None:
+                splash.destroy()
+            raise
+        if splash is not None:
+            splash.finish(self._reveal)   # tempo mínimo de tela, depois mostra a janela e some com fade
+        else:
+            self._reveal()
+
+    def _reveal(self):
+        self.update_idletasks()
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _init_app(self):
         self.dnd = False
         if TkinterDnD:
             try:
@@ -211,7 +238,7 @@ class App(ctk.CTk, _DnDBase):
     # ------------------------------------------------------------ layout
     def _build(self):
         f = (FONT, 13)
-        self.title(f'Second Take {__version__}')
+        self.title('Second Take')
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(4, weight=1)
 
@@ -1027,6 +1054,84 @@ class App(ctk.CTk, _DnDBase):
         except queue.Empty:
             pass
         self.after(100, self._poll)
+
+
+# ======================================================================= apresentação
+
+class Splash(tk.Toplevel):
+    """Tela de apresentação sem barra de título, centralizada na tela, nas cores do tema do sistema.
+    Mostra o ícone, o nome, a linha do app com a versão e a autoria."""
+
+    W, H = 440, 300
+    MIN_SECONDS = 1.2      # tempo mínimo na tela, contado desde que aparece (não soma ao carregamento)
+    FADE_MS = 250
+
+    def __init__(self, app):
+        self._t0 = time.monotonic()
+        self._job = None
+        self._closing = False
+        self._on_close = None
+        dark = ctk.get_appearance_mode() == 'Dark'
+        col = {k: v[1 if dark else 0] for k, v in PAL.items()}
+        super().__init__(app, bg=col['border'])
+        self.overrideredirect(True)
+        try:
+            self.attributes('-topmost', True)
+        except tk.TclError:
+            pass
+        x = (self.winfo_screenwidth() - self.W) // 2
+        y = (self.winfo_screenheight() - self.H) // 2 - 40
+        self.geometry(f'{self.W}x{self.H}+{max(x, 0)}+{max(y, 0)}')
+        card = tk.Frame(self, bg=col['card'])
+        card.place(x=1, y=1, width=self.W - 2, height=self.H - 2)   # 1 px de borda
+        box = ctk.CTkFrame(card, fg_color=col['card'], bg_color=col['card'], corner_radius=0)
+        box.place(relx=0.5, rely=0.46, anchor='center')
+        icon = app_icon(96)
+        if icon:
+            ctk.CTkLabel(box, text='', image=icon, fg_color=col['card']).pack(pady=(0, 10))
+        ctk.CTkLabel(box, text='Second Take', font=(FONT, 24, 'bold'), text_color=col['text'],
+                     fg_color=col['card']).pack()
+        ctk.CTkLabel(box, text=t('app.tagline', v=__version__), font=(FONT, 13), text_color=col['muted'],
+                     fg_color=col['card']).pack(pady=(2, 0))
+        ctk.CTkLabel(card, text=t('about.by'), font=(FONT, 11), text_color=col['muted'],
+                     fg_color=col['card']).place(relx=0.5, rely=1.0, y=-22, anchor='center')
+        self.bind('<Button-1>', lambda e: self._close())   # um clique pula
+        self.lift()
+        self.update()
+
+    def finish(self, on_close):
+        """Chamado quando a janela principal está pronta: espera o que faltar do tempo mínimo."""
+        self._on_close = on_close
+        wait = max(0.0, self.MIN_SECONDS - (time.monotonic() - self._t0))
+        self._job = self.after(int(wait * 1000), self._close)
+
+    def _close(self):
+        if self._closing or self._on_close is None:
+            return
+        self._closing = True
+        if self._job:
+            self.after_cancel(self._job)
+        self._on_close()           # mostra a janela principal por baixo
+        try:
+            self.lift()
+        except tk.TclError:
+            return
+        self._fade(1.0)
+
+    def _fade(self, alpha):
+        steps = 10
+        alpha -= 1.0 / steps
+        try:
+            if alpha <= 0:
+                self.destroy()
+                return
+            self.attributes('-alpha', alpha)
+            self.after(self.FADE_MS // steps, self._fade, alpha)
+        except tk.TclError:        # janela já fechada ou sem suporte a transparência
+            try:
+                self.destroy()
+            except tk.TclError:
+                pass
 
 
 # ======================================================================= diálogos
