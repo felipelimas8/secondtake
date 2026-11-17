@@ -1,8 +1,13 @@
 # Changelog
 
+## 0.9.9 — 2026-11-17
+- **Prévia no Detalhes**: três quadros do clipe (10 %, 50 % e 90 %) no topo do painel, gerados em segundo plano pelo ffmpeg. Funciona com clipes íntegros, com cabeçalho danificado (os quadros são lidos direto pelo índice) e com o arquivo recuperado, que aparece logo depois do reparo. Em S-Log3 a imagem vem sem LUT, e o painel avisa.
+- **Datas do arquivo preservadas**: o recuperado fica com a data de modificação (e de acesso) do clipe original, então a ilha de edição ordena pela hora da filmagem e não pela hora do reparo.
+- **Timecode na extração bruta**: o MP4 limpo ganha uma trilha de timecode com o LTC do XML da câmera (com drop-frame em 29,97/59,94), desde que o começo da gravação tenha sido recuperado.
+- **Referência pela assinatura técnica**: o app compara modelo da câmera, codec XAVC, fps de gravação e de captura (S&Q), resolução e áudio, lidos do XML da Sony ou do índice do arquivo, e testa primeiro a referência idêntica. Quando ela explica o clipe inteiro, as outras nem são lidas, o que deixa a análise mais rápida em pastas grandes.
+
 ## 0.9.8 — 2026-11-17
 - **Windows de volta**: a 0.9.7 saiu só para Mac, porque um teste novo usava um nome de pasta inválido no Windows (`|`) e derrubou o build do Windows. O teste foi corrigido; o app em si não muda em relação à 0.9.7.
-- **Build do Mac**: `scripts/build_macos.sh` passa a montar e assinar tudo numa pasta temporária no disco interno, e funciona com o projeto num SSD exFAT ou numa pasta do iCloud. A assinatura é feita de dentro para fora (bibliotecas, frameworks e por último o app), sem o `codesign --deep`, e conferida com `codesign --verify --strict`.
 
 ## 0.9.7 — 2026-11-17
 - **Sem arquivo cortado com nome de pronto**: o resultado é gravado primeiro num arquivo oculto `.part` e só recebe o nome final (`_REPARADO`, `_RECONSTRUIDO`, `_EXTRAIDO`) depois de gravado por inteiro no disco. Se o disco encher ou o SSD desconectar no meio, o `.part` é apagado e nada fica com cara de concluído.

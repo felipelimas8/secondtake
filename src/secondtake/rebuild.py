@@ -473,6 +473,20 @@ class Plan:
         return len(self.chunks) * self.profile.G * self.profile.v_delta / self.profile.v_ts
 
 
+def _min_chunk(prof: 'Profile') -> int:
+    """Menor tamanho possível de um bloco (rtmd + áudio, sem contar o vídeo): perder menos
+    que isso no começo não pode ser um bloco inteiro."""
+    return prof.G * prof.meta_size + prof.audio_chunk
+
+
+def starts_at_first_chunk(p: 'Plan') -> bool:
+    """O 1º bloco recuperado é o 1º gravado? (no máximo uma fração de bloco perdida no início,
+    ex.: um SEI antes do 1º AUD). Só assim o timecode do XML vale para o 1º quadro."""
+    if not p.chunks:
+        return False
+    return p.chunks[0].meta_off - p.data_start < _min_chunk(p.profile)
+
+
 def plan(path: str, refs: list[str], find_moov, data_start: int | None = None) -> Plan:
     """Testa cada referência e fica com a que explica mais blocos do arquivo."""
     best, seen, errors = None, {}, []
@@ -490,6 +504,11 @@ def plan(path: str, refs: list[str], find_moov, data_start: int | None = None) -
         chunks, end, reason, gaps = scan_chunks(path, prof, start)
         if best is None or (len(chunks), prof.n_keys) > (len(best.chunks), best.profile.n_keys):
             best = Plan(prof, chunks, end, reason, start, gaps)
+        # as referências chegam em ordem de assinatura (XML/moov): se esta já explica o arquivo
+        # inteiro, sem trechos pulados e com GOP confiável, não precisa testar as outras
+        if chunks and prof.n_keys >= 2 and getattr(reason, 'key', '') == 'reason.end' \
+                and sum(b - a for a, b in gaps) < _min_chunk(prof):
+            break
     if best is None or not best.chunks:
         from .i18n import Join
         raise ValueError(Join(L('err.no_compatible'), best.reason if best is not None else '', sep=' — '))
@@ -576,7 +595,7 @@ def _wav_header(n_bytes: int, rate: int, ch: int, bits: int) -> bytes:
 
 
 def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
-                profile: Profile | None = None, progress=None) -> dict:
+                profile: Profile | None = None, progress=None, timecode: str = '') -> dict:
     """Último recurso: grava o vídeo como stream H.264 (.h264) e o áudio como .wav,
     e monta um MP4 limpo (com ffmpeg, se houver). Com um Plan (layout conhecido),
     áudio e vídeo saem completos; sem Plan, varre o arquivo atrás de quadros H.264
@@ -591,7 +610,7 @@ def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
     if prof:
         sps, pps = avcc_params(prof.video_stsd)
         params = b''.join(SC + x for x in sps + pps)
-    res = {'h264': h264, 'wav': None, 'mov': None, 'frames': 0, 'audio_s': 0.0}
+    res = {'h264': h264, 'wav': None, 'mov': None, 'frames': 0, 'audio_s': 0.0, 'timecode': ''}
     samples: list[tuple[int, int, bool]] = []
     size = os.path.getsize(path)
     with open(path, 'rb') as f, atomic_write(h264) as out:
@@ -679,7 +698,12 @@ def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
         tmp = os.path.join(out_dir, f'.{os.path.basename(base)}_tmp.MP4')
         try:
             write(path, plan_, tmp)
-            if _ffmpeg_copy(tmp, mov):
+            # o timecode do XML só vale se o 1º quadro recuperado é o 1º quadro gravado
+            tc = timecode if starts_at_first_chunk(plan_) else ''
+            if _ffmpeg_copy(tmp, mov, tc):
+                res['mov'] = mov
+                res['timecode'] = tc
+            elif tc and _ffmpeg_copy(tmp, mov):      # timecode recusado pelo ffmpeg: MP4 sem tmcd
                 res['mov'] = mov
         finally:
             if os.path.exists(tmp):
@@ -695,7 +719,9 @@ def _ffmpeg():
     return ffmpeg_bin('ffmpeg')
 
 
-def _ffmpeg_copy(src: str, dst: str) -> bool:
+def _ffmpeg_copy(src: str, dst: str, timecode: str = '') -> bool:
+    """Copia vídeo + áudio para um MP4 limpo (sem recodificar). Com `timecode`
+    (HH:MM:SS:FF, ou ;FF em drop-frame), grava também uma trilha tmcd."""
     import sys
     ff = _ffmpeg()
     if not ff:
@@ -708,7 +734,8 @@ def _ffmpeg_copy(src: str, dst: str) -> bool:
     try:
         # grava no .part (com -f mp4, já que a extensão .part não diz o formato) e só renomeia no fim
         r = subprocess.run([ff, '-v', 'error', '-y', '-i', src, '-map', '0:v:0', '-map', '0:a?',
-                            '-c', 'copy', '-f', 'mp4', tmp], capture_output=True,
+                            '-c', 'copy'] + (['-timecode', timecode] if timecode else [])
+                           + ['-f', 'mp4', tmp], capture_output=True,
                            timeout=ffmpeg_timeout(os.path.getsize(src)), **kw)
         if r.returncode == 0 and os.path.exists(tmp):
             fsync_path(tmp)

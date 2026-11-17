@@ -57,8 +57,9 @@ Para experimentar sem material real, baixe `SecondTake-amostras-teste.zip` na p�
 ### Interface
 1. **Analisar**: escolhe uma pasta de brutas e examina todos os clipes. **Analisar arquivos…** examina só os clipes escolhidos e busca referências na mesma pasta.
 2. Os arquivos reparáveis já vêm selecionados. Clique em **Reparar selecionados**.
-3. **Avançado…** abre os controles manuais de um arquivo: modo, referência, offset e **Simular**.
-4. **Salvar junto dos originais** (chave no rodapé): grava cada recuperado na subpasta `Second Take` dentro da pasta do próprio clipe. O app nunca grava ao lado do original.
+3. Selecione um clipe para ver os **Detalhes**: metadados técnicos e uma prévia de três quadros (10 %, 50 % e 90 %), também em clipes com cabeçalho danificado e logo após o reparo.
+4. **Avançado…** abre os controles manuais de um arquivo: modo, referência, offset e **Simular**.
+5. **Salvar junto dos originais** (chave no rodapé): grava cada recuperado na subpasta `Second Take` dentro da pasta do próprio clipe. O app nunca grava ao lado do original.
 
 ### Linha de comando
 ```bash

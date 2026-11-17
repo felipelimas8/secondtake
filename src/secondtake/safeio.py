@@ -74,3 +74,15 @@ def unique_path(path: str) -> str:
     d, name = os.path.split(path)
     base, ext = os.path.splitext(name)
     return unique_stem(d, base, [ext]) + ext
+
+
+def copy_times(st: os.stat_result, *paths: str):
+    """Aplica as datas de acesso/modificação do original (`os.stat` tirado ANTES de ler o
+    arquivo) aos recuperados, para a ilha de edição ordenar pela hora da filmagem.
+    Só datas: permissões e flags (ex.: arquivo travado) não são copiadas."""
+    for p in paths:
+        if p and os.path.exists(p):
+            try:
+                os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns))
+            except OSError:
+                pass

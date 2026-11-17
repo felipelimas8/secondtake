@@ -26,7 +26,7 @@ import sys
 from dataclasses import dataclass, field
 
 from .i18n import L, Join, msg, t as tr
-from .safeio import atomic_write, unique_stem
+from .safeio import atomic_write, copy_times, unique_stem
 
 HDR = 262144                 # ftyp + uuid + free + cabeçalho mdat (layout XAVC S)
 MDAT_POS = HDR - 16          # 262128
@@ -248,13 +248,18 @@ def sony_xml(path: str) -> dict:
                 'primaries': item('CaptureColorPrimaries'),
                 'created': g('n:CreationDate', 'value'),
                 'audio_codec': g('.//n:AudioRecPort', 'audioCodec'),
+                'width': g('.//n:VideoLayout', 'pixel'),
+                'height': g('.//n:VideoLayout', 'numOfVerticalLine'),
+                'audio_ch': g('.//n:AudioFormat', 'numOfChannel'),
                 'lens': g('.//n:Lens', 'modelName') or item('LensModelName'),
             }
             if tc is not None and tc.get('value') and len(tc.get('value')) == 8:
                 # LTC em BCD, bytes invertidos (FF SS MM HH) com bits de flag misturados
                 b = bytes.fromhex(tc.get('value'))
                 ff, ss, mm, hh = b[0] & 0x3F, b[1] & 0x7F, b[2] & 0x7F, b[3] & 0x3F
-                out['timecode'] = f'{hh:02x}:{mm:02x}:{ss:02x}:{ff:02x}'
+                # bit 6 do byte de quadros = drop-frame (só existe em 29,97/59,94: tcFps 30/60)
+                df = bool(b[0] & 0x40) and tc_fps in ('30', '60')
+                out['timecode'] = f'{hh:02x}:{mm:02x}:{ss:02x}{";" if df else ":"}{ff:02x}'
             if tc_fps:
                 out['tc_fps'] = tc_fps
             return {k: v for k, v in out.items() if v and v != '4294967295'}
@@ -538,11 +543,62 @@ def _is_reference(c: Clip) -> bool:
         and struct.unpack('>I', h[MDAT_POS:MDAT_POS + 4])[0] == 1
 
 
+def _fps_key(v) -> str:
+    """'23.98p' / '23.976' / 23.976 -> '23.98'; '50i' -> '50i'."""
+    if v in (None, ''):
+        return ''
+    txt = str(v).strip().lower()
+    inter = txt.endswith('i')
+    try:
+        num = float(txt.rstrip('pi'))
+    except ValueError:
+        return txt
+    return f'{num:.2f}'.rstrip('0').rstrip('.') + ('i' if inter else '')
+
+
+SIG_KEYS = ('camera', 'codec', 'format_fps', 'capture_fps', 'width', 'height', 'audio_ch', 'audio_bits')
+
+
+def signature(c: Clip) -> dict:
+    """Assinatura técnica do clipe para escolher a referência: modelo da câmera, codec XAVC,
+    fps de gravação e de captura (S&Q), resolução e áudio. Vem do XML da Sony
+    (C0001M01.XML) e, onde faltar, do índice (moov) do próprio arquivo."""
+    m = c.extra.get('meta') or {}
+    xml = {k[4:]: v for k, v in m.items() if k.startswith('xml_')}
+    if not xml:                                   # referências rápidas guardam o XML nos atributos
+        xml = {k: getattr(c, k) for k in ('camera', 'codec', 'fps') if getattr(c, k, '')}
+    sig = {
+        'camera': xml.get('camera', '') or c.camera,
+        'codec': xml.get('codec', '') or c.codec,
+        'format_fps': _fps_key(xml.get('format_fps') or m.get('fps')),
+        'capture_fps': _fps_key(xml.get('fps') or c.fps),
+        'width': str(xml.get('width') or m.get('width') or ''),
+        'height': str(xml.get('height') or m.get('height') or ''),
+        'audio_ch': str(xml.get('audio_ch') or m.get('audio_channels') or ''),
+        'audio_bits': str(m.get('audio_bits') or ''),
+    }
+    return {k: v for k, v in sig.items() if v}
+
+
+def match_score(a: dict, b: dict) -> tuple[int, int]:
+    """(divergências, coincidências) entre duas assinaturas, só nos campos que as duas têm."""
+    common = [k for k in SIG_KEYS if k in a and k in b]
+    diff = sum(1 for k in common if a[k] != b[k])
+    return diff, len(common) - diff
+
+
 def _ref_candidates(c: Clip, refs: list[Clip]) -> list[Clip]:
-    same_dir = lambda r: os.path.dirname(r.path) == os.path.dirname(c.path)
-    pool = [r for r in refs if c.codec and r.group == c.group] or list(refs)
-    pool.sort(key=lambda r: (not same_dir(r), -r.size))
-    return pool
+    """Referências em ordem de preferência: assinatura idêntica primeiro (menos divergências,
+    mais coincidências), depois mesma pasta e maior arquivo (mais keyframes para o GOP).
+    Ninguém é descartado: a reconstrução ainda testa as outras se a primeira não servir."""
+    same_dir = lambda r: os.path.dirname(r.path) == os.path.dirname(c.path)  # noqa: E731
+    sig = signature(c)
+    scored = []
+    for r in refs:
+        diff, hits = match_score(sig, signature(r))
+        scored.append(((diff, -hits, not same_dir(r), -r.size), r))
+    scored.sort(key=lambda x: x[0])
+    return [r for _, r in scored]
 
 
 def plan_rebuild(c: Clip, refs: list[str], data_start: int | None = None):
@@ -596,10 +652,13 @@ def _quick_ref(path: str) -> Clip | None:
             h = f.read(HDR)
         if h[4:8] != b'ftyp' or h[MDAT_POS + 4:MDAT_POS + 8] != b'mdat':
             return None
-        if find_moov(path) is None:
+        m = find_moov(path)
+        if m is None:
             return None
         c = Clip(path, size, OK)
-        c.__dict__.update(sony_xml(path))
+        xml = sony_xml(path)
+        c.camera, c.codec, c.fps = xml.get('camera', ''), xml.get('codec', ''), xml.get('fps', '')
+        c.extra['meta'] = read_meta(path, m[1])
         return c
     except Exception:
         return None
@@ -648,6 +707,7 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
         raise ValueError(L('err.not_repairable', name=c.name, status=c.status))
     out_dir = clip_out_dir(c.path, out_dir)      # nunca grava ao lado do original
     os.makedirs(out_dir, exist_ok=True)
+    st = os.stat(c.path)                         # datas do original, antes de qualquer leitura
     stem, ext = os.path.splitext(c.name)
     mode = c.extra.get('mode', 'cabecalho' if c.status == HEADER else 'reconstruir')
     if mode == 'extrair':
@@ -660,14 +720,16 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
             except Exception:
                 continue
         res = rb.extract_raw(c.path, out_dir, getattr(c, '_plan', None),
-                             prof, chunk_cb)
+                             prof, chunk_cb, timecode=sony_xml(c.path).get('timecode', ''))
+        copy_times(st, res['mov'], res['h264'], res['wav'])
         c.output = res['mov'] or res['h264'] or ''
         if not res['frames']:
             c.verify = L('verify.nothing')
             return c.output
         c.verify = Join(L('verify.extracted', n=res['frames']),
                         L('verify.extracted_audio', s=f"{res['audio_s']:.1f}") if res['wav']
-                        else L('verify.extracted_noaudio'))
+                        else L('verify.extracted_noaudio'),
+                        L('verify.extracted_tc', tc=res['timecode']) if res.get('timecode') else '')
         return c.output
     if not c.reference:
         raise ValueError(L('err.no_ref', name=c.name))
@@ -677,6 +739,7 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
         oext = out_ext(c.name)
         dst = unique_stem(out_dir, f'{stem}_RECONSTRUIDO', [oext]) + oext
         rb.write(c.path, p, dst, chunk_cb)
+        copy_times(st, dst)
         c.output = dst
         return dst
     with open(c.reference, 'rb') as f:
@@ -701,6 +764,7 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
                 chunk_cb(copied, c.size)
     if has_xml:
         shutil.copy2(xml_src, base + 'M01.XML')
+    copy_times(st, dst)
     c.output = dst
     return dst
 
@@ -745,15 +809,20 @@ def run_quiet(cmd: list[str], timeout: float | None = None, cancel=None, **kw):
         return subprocess.run(cmd, timeout=timeout, **kw)
     import time
     text = kw.pop('text', False)
+    data = kw.pop('input', None)
     if kw.pop('capture_output', False):
         kw['stdout'] = kw['stderr'] = subprocess.PIPE
+    if data is not None:
+        kw['stdin'] = subprocess.PIPE
     deadline = None if timeout is None else time.monotonic() + timeout
     with subprocess.Popen(cmd, text=text, **kw) as proc:
         while True:
             try:
-                out, err = proc.communicate(timeout=0.25)
+                # a entrada só pode ser enviada na 1ª chamada; nas seguintes o envio continua sozinho
+                out, err = proc.communicate(input=data, timeout=0.25)
                 return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
             except subprocess.TimeoutExpired:
+                data = None
                 if cancel.is_set():
                     proc.kill()
                     proc.communicate()
@@ -814,6 +883,100 @@ def verify(c: Clip, cancel=None) -> str:
     if c.audio_db is not None:
         c.verify = Join(c.verify, L('verify.audio_peak', db=c.audio_db))
     return c.verify
+
+
+# ---------------------------------------------------------------- prévia (thumbnails)
+
+THUMB_FRACS = (0.1, 0.5, 0.9)
+THUMB_WIDTH = 192            # px; o painel mostra em ~86 px (nítido em tela Retina)
+THUMB_TIMEOUT = 20.0         # s por quadro
+
+
+def video_samples(moov: bytes):
+    """Tabela do vídeo a partir do moov: ([(offset, tamanho)], índices de keyframe (0-based),
+    dados do stsd). Lê stco/co64 + stsc + stsz + stss."""
+    from . import rebuild as rb
+    root = rb.Box.parse(moov)[0]
+    for t in root.all(b'trak'):
+        if t.find(b'mdia', b'hdlr').data[8:12] != b'vide':
+            continue
+        stbl = t.find(b'mdia', b'minf', b'stbl')
+        sz = stbl.find(b'stsz').data
+        fixed, n = struct.unpack('>II', sz[4:12])
+        sizes = [fixed] * n if fixed else list(struct.unpack(f'>{n}I', sz[12:12 + 4 * n]))
+        co = stbl.find(b'stco')
+        if co is not None:
+            k = struct.unpack('>I', co.data[4:8])[0]
+            chunk_offs = list(struct.unpack(f'>{k}I', co.data[8:8 + 4 * k]))
+        else:
+            co = stbl.find(b'co64')
+            k = struct.unpack('>I', co.data[4:8])[0]
+            chunk_offs = list(struct.unpack(f'>{k}Q', co.data[8:8 + 8 * k]))
+        stsc = rb._table(stbl.find(b'stsc'), 3)
+        samples, si = [], 0
+        for ci, off in enumerate(chunk_offs):
+            first = ci + 1
+            spc = next((e[1] for e in reversed(stsc) if e[0] <= first), 0)
+            for _ in range(spc):
+                if si >= n:
+                    break
+                samples.append((off, sizes[si]))
+                off += sizes[si]
+                si += 1
+        ss = stbl.find(b'stss')
+        keys = sorted(x[0] - 1 for x in rb._table(ss, 1)) if ss is not None else list(range(len(samples)))
+        return samples, keys, stbl.find(b'stsd').data
+    return [], [], b''
+
+
+def thumbnail_source(c: Clip) -> str | None:
+    """Arquivo de onde tirar a prévia: o recuperado, se existir; senão o próprio clipe,
+    desde que tenha índice (íntegro ou só com o cabeçalho danificado)."""
+    if c.output and os.path.isfile(c.output) and c.output.lower().endswith(('.mp4', '.mov')):
+        return c.output
+    if c.moov_pos >= 0 and c.status in (OK, HEADER):
+        return c.path
+    return None
+
+
+def thumbnails(path: str, fracs=THUMB_FRACS, width: int = THUMB_WIDTH, cancel=None) -> list:
+    """Quadros de prévia (PNG em memória) a 10 %, 50 % e 90 % do clipe.
+
+    Não depende do cabeçalho do arquivo: o keyframe mais próximo de cada ponto é lido direto
+    pelas tabelas do moov, recebe o SPS/PPS do avcC e é decodificado pelo ffmpeg via pipe.
+    Por isso funciona também em clipes com cabeçalho danificado. Só H.264 (avc1) por
+    enquanto; retorna [] sem ffmpeg, sem moov ou em outro codec. Itens None = quadro ilegível."""
+    from . import rebuild as rb
+    ff = ffmpeg_bin()
+    m = find_moov(path)
+    if not ff or m is None:
+        return []
+    try:
+        samples, keys, stsd = video_samples(m[1])
+    except Exception:
+        return []
+    sps, pps = rb.avcc_params(stsd)
+    if not samples or not keys or not sps:
+        return []
+    params = b''.join(rb.SC + x for x in sps + pps)
+    out = []
+    with open(path, 'rb') as f:
+        for fr in fracs:
+            target = min(len(samples) - 1, int(len(samples) * fr))
+            k = max((x for x in keys if x <= target), default=keys[0])
+            off, ln = samples[k]
+            f.seek(off)
+            au = rb._au_to_annexb(f.read(ln), params)
+            try:
+                r = run_quiet([ff, '-v', 'error', '-f', 'h264', '-i', '-', '-frames:v', '1',
+                               '-vf', f'scale={width}:-2:flags=bilinear,format=rgb24',
+                               '-f', 'image2pipe', '-c:v', 'png', '-'],
+                              input=au, capture_output=True, timeout=THUMB_TIMEOUT,
+                              **({'cancel': cancel} if cancel is not None else {}))
+                out.append(r.stdout if r.returncode == 0 and r.stdout.startswith(b'\x89PNG') else None)
+            except subprocess.TimeoutExpired:
+                out.append(None)
+    return out
 
 
 CSV_FORMULA = ('=', '+', '-', '@', '\t', '\r')

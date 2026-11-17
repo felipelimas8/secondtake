@@ -98,6 +98,7 @@ CATALOG: dict[str, tuple[str, str]] = {
     'verify.audio_peak': (' · áudio pico {db} dBFS', ' · audio peak {db} dBFS'),
     'verify.extracted': ('{n} quadros extraídos', '{n} frames extracted'),
     'verify.extracted_audio': (', {s} s de áudio', ', {s} s of audio'),
+    'verify.extracted_tc': (', timecode {tc}', ', timecode {tc}'),
     'verify.extracted_noaudio': (', sem áudio', ', no audio'),
     'verify.nothing': ('nenhum quadro H.264 válido encontrado — sem recuperação possível',
                        'no valid H.264 frames found — nothing recoverable'),
@@ -152,6 +153,12 @@ CATALOG: dict[str, tuple[str, str]] = {
     'meta.size': ('Tamanho', 'Size'),
     'meta.none': ('Selecione um clipe para ver os detalhes.', 'Select a clip to see its details.'),
     'meta.copy': ('Copiar', 'Copy'),
+    'meta.preview': ('Prévia (10 % · 50 % · 90 %)', 'Preview (10% · 50% · 90%)'),
+    'meta.preview_loading': ('Gerando prévia…', 'Generating preview…'),
+    'meta.preview_after': ('A prévia aparece depois do reparo.', 'The preview appears after the repair.'),
+    'meta.preview_noff': ('Prévia indisponível: ffmpeg não encontrado.', 'Preview unavailable: ffmpeg not found.'),
+    'meta.preview_fail': ('Não foi possível gerar a prévia deste clipe.', 'Could not generate a preview for this clip.'),
+    'meta.preview_log': ('Imagem em S-Log3, sem LUT.', 'S-Log3 image, no LUT applied.'),
 
     # ---- CLI
     'cli.desc': ('Diagnóstico e recuperação de clipes Sony XAVC S corrompidos.',

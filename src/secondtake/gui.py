@@ -152,6 +152,10 @@ class App(ctk.CTk, _DnDBase):
         self.q = queue.Queue()
         self.busy = False
         self.repairing = False
+        self._thumb_cache: dict = {}       # (arquivo, mtime, tamanho) -> [PNG]
+        self._thumb_pending: set = set()
+        self._thumb_want = None            # chave da prévia que o painel está esperando
+        self._thumb_imgs: list = []        # referências às CTkImage (senão o Tk as descarta)
         self.cancel_evt = threading.Event()
         self.src = tk.StringVar()
         self.dst = tk.StringVar(value=os.path.expanduser('~/Movies/SecondTake'))
@@ -460,9 +464,10 @@ class App(ctk.CTk, _DnDBase):
         c = sel[0]
         ctk.CTkLabel(self.details, text=c.name, font=(MONO, 11), text_color=PAL['muted'], anchor='w').grid(
             row=1, column=0, sticky='ew', padx=14, pady=(0, 8))
+        self._show_preview(c)                    # no topo: o painel não rola em janelas baixas
         rows = core.meta_rows(c)
         box = ctk.CTkFrame(self.details, fg_color='transparent')
-        box.grid(row=2, column=0, sticky='nsew', padx=14)
+        box.grid(row=4, column=0, sticky='nsew', padx=14)
         box.grid_columnconfigure(1, weight=1)
         for i, (k, v) in enumerate(rows):
             ctk.CTkLabel(box, text=k, font=(FONT, 11), text_color=PAL['muted'], anchor='nw', height=16).grid(
@@ -474,7 +479,72 @@ class App(ctk.CTk, _DnDBase):
             self.clipboard_clear()
             self.clipboard_append(c.name + '\n' + '\n'.join(f'{k}: {v}' for k, v in rows))
         ctk.CTkButton(self.details, text=t('meta.copy'), width=80, height=26, font=(FONT, 11), command=copy,
-                      **secondary()).grid(row=3, column=0, sticky='w', padx=14, pady=(10, 12))
+                      **secondary()).grid(row=5, column=0, sticky='w', padx=14, pady=(10, 12))
+
+    # ------------------------------------------------------------ prévia (3 quadros)
+    def _show_preview(self, c):
+        ctk.CTkLabel(self.details, text=t('meta.preview'), font=(FONT, 11, 'bold'), text_color=PAL['muted'],
+                     anchor='w').grid(row=2, column=0, sticky='ew', padx=14, pady=(0, 4))
+        self.thumb_box = ctk.CTkFrame(self.details, fg_color='transparent')
+        self.thumb_box.grid(row=3, column=0, sticky='ew', padx=14, pady=(0, 10))
+        self._thumb_want = None
+        src = core.thumbnail_source(c)
+        if not core.ffmpeg_bin():
+            return self._thumb_note(t('meta.preview_noff'))
+        if not src:
+            return self._thumb_note(t('meta.preview_after'))
+        try:
+            st = os.stat(src)
+        except OSError:
+            return self._thumb_note(t('meta.preview_fail'))
+        key = (src, st.st_mtime_ns, st.st_size)
+        self._thumb_want = key
+        self._thumb_log = 'log3' in str((c.extra.get('meta') or {}).get('xml_gamma', '')).lower().replace('-', '')
+        if key in self._thumb_cache:
+            return self._render_thumbs(self._thumb_cache[key])
+        self._thumb_note(t('meta.preview_loading'))
+        if key in self._thumb_pending:
+            return
+        self._thumb_pending.add(key)
+
+        def work():
+            try:
+                pngs = core.thumbnails(src)
+            except Exception:
+                pngs = []
+            self.q.put(('thumbs', key, pngs))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _thumb_note(self, text):
+        for w in self.thumb_box.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(self.thumb_box, text=text, font=(FONT, 11), text_color=PAL['muted'], anchor='w',
+                     justify='left', wraplength=260).pack(anchor='w')
+
+    def _render_thumbs(self, pngs):
+        import io
+        from PIL import Image
+        if not pngs or not any(pngs):
+            return self._thumb_note(t('meta.preview_fail'))
+        for w in self.thumb_box.winfo_children():
+            w.destroy()
+        row = ctk.CTkFrame(self.thumb_box, fg_color='transparent')
+        row.pack(anchor='w')
+        self._thumb_imgs = []
+        w_px = 84
+        for i, data in enumerate(pngs):
+            if not data:
+                im = Image.new('RGB', (16, 9), (40, 40, 40))
+            else:
+                im = Image.open(io.BytesIO(data))
+                im.load()
+            h_px = max(1, round(w_px * im.height / im.width))
+            img = ctk.CTkImage(light_image=im, dark_image=im, size=(w_px, h_px))
+            self._thumb_imgs.append(img)
+            ctk.CTkLabel(row, image=img, text='').pack(side='left', padx=(0 if i == 0 else 4, 0))
+        if getattr(self, '_thumb_log', False):
+            ctk.CTkLabel(self.thumb_box, text=t('meta.preview_log'), font=(FONT, 10), text_color=PAL['muted'],
+                         anchor='w').pack(anchor='w', pady=(4, 0))
 
     def _on_view(self, value):
         self.only_bad = value == t('app.view_bad')
@@ -482,7 +552,9 @@ class App(ctk.CTk, _DnDBase):
 
     def _show_empty(self, show: bool):
         if show:
-            self.empty.place(relx=0.5, rely=0.45, anchor='center')
+            # centraliza na área da tabela (não no corpo inteiro, que inclui o painel Detalhes);
+            # y=12 compensa metade do cabeçalho das colunas
+            self.empty.place(in_=self.tree, relx=0.5, rely=0.5, y=12, anchor='center')
         else:
             self.empty.place_forget()
 
@@ -914,6 +986,8 @@ class App(ctk.CTk, _DnDBase):
                     i = str(self.clips.index(c))
                     if self.tree.exists(i):
                         self.tree.item(i, values=self._row(c), tags=(kind(c),))
+                    if self._selected() == [c]:
+                        self._show_details()          # prévia do arquivo recuperado logo após o reparo
                 elif k == 'fix_done':
                     if m[4] is not None:
                         self._set_status(L('app.cancelled', n=m[1], total=m[4], report=m[3], path=m[2]))
@@ -923,6 +997,15 @@ class App(ctk.CTk, _DnDBase):
                     self.repairing = False
                     self.cancel_evt.clear()
                     self._set_busy(False)
+                elif k == 'thumbs':
+                    _, key, pngs = m
+                    self._thumb_pending.discard(key)
+                    self._thumb_cache[key] = pngs
+                    if len(self._thumb_cache) > 200:
+                        self._thumb_cache.pop(next(iter(self._thumb_cache)))
+                    if key == self._thumb_want and getattr(self, 'thumb_box', None) is not None \
+                            and self.thumb_box.winfo_exists():
+                        self._render_thumbs(pngs)
                 elif k == 'update':
                     _, info, manual, err = m
                     if manual:
