@@ -491,10 +491,9 @@ class App(ctk.CTk, _DnDBase):
         if sys.platform == 'darwin':
             # menu do app (Second Take): itens entram logo abaixo de "Sobre o Second Take"
             app_menu = tk.Menu(bar, name='apple', tearoff=0)
-            # o Tk 8.6 cria sozinho o "Sobre…" (via tkAboutDialog); o Tk 9 (Python do Homebrew) não
-            if tk.TkVersion >= 9:
-                app_menu.add_command(label=t('about.title'), command=self.about)
-                app_menu.add_separator()
+            # o Tk não cria o "Sobre…" quando o app define o próprio menu do app: entra aqui sempre
+            app_menu.add_command(label=t('about.title'), command=self.about)
+            app_menu.add_separator()
             app_menu.add_command(label=t('upd.menu'), command=lambda: self.check_updates(manual=True))
             app_menu.add_separator()
             bar.add_cascade(menu=app_menu)

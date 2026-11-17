@@ -1,5 +1,8 @@
 # Changelog
 
+## 0.9.6 — 2026-11-16
+- Mac: o item **Sobre o Second Take** aparece sempre no menu do app, qualquer que seja a versão do Python/Tk usada no build (na 0.9.5 ele ainda faltava nos builds com Tk 8.6).
+
 ## 0.9.5 — 2026-11-16
 - Mac: o item **Sobre o Second Take** voltou ao menu do app quando o app é gerado com Python/Tk 9 (Homebrew), que não cria esse item sozinho.
 - (A 0.9.4 foi retirada: saiu por engano com arquivos da versão beta.)
