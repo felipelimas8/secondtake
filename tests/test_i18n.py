@@ -83,3 +83,15 @@ def test_auto_preference_follows_system(monkeypatch, tmp_path):
     assert i18n.preference() == 'pt' and i18n.init() == 'pt'   # fixo
     i18n.set_preference('auto')
     assert i18n.preference() == 'auto' and i18n.init() == 'en'  # voltou a seguir o sistema
+
+
+@pytest.mark.parametrize('key', ['app.report_failed', 'app.export_failed', 'meta.diagnosis'])
+def test_report_failure_and_details_keys(key):
+    """B3 e Detalhes (0.9.11): chaves novas nos dois idiomas, com os mesmos parâmetros."""
+    pt, en = CATALOG[key]
+    assert pt != en
+    if key == 'app.report_failed':
+        m = L(key, n=3, err='No space left on device')
+        assert str(m).startswith('3 clipe(s) processado(s)') and 'log' in str(m)
+        i18n.set_lang('en')
+        assert str(m).startswith('3 clip(s) processed') and 'Recovered files are safe' in str(m)

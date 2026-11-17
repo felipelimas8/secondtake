@@ -1,14 +1,70 @@
 # Changelog
 
+## 0.10.0b2 — 2026-11-17 (beta)
+- **Beta em dia com a versão estável**: traz tudo da 0.9.7 à 0.9.11 (escrita atômica e numeração `_2`/`_3`, salvar junto dos originais, prévia, datas, timecode, XAVC HS de base, layout da FX30, relatório que avisa quando não grava, correção da janela no Windows, build com dependências travadas, teste de fumaça e SHA256SUMS.txt).
+- **Manter o nome original na pasta dos originais**: em vez de recusar, a saída vai para a subpasta `Second Take`, com o mesmo nome do clipe (`Second Take/C0001.MP4`). Se o nome já existir lá, vira `C0001_2.MP4`: nada é sobrescrito.
+- O XML de câmera acompanha o clipe também na numeração (`C0001_2M01.XML`) e mantém as datas do original.
+- Título, tela de apresentação e diálogos usam o nome do canal ("Second Take Beta").
+
 ## 0.10.0b1 — 2026-11-16 (beta)
 - **Second Take Beta**: novo canal de testes, publicado a partir do branch `beta`. É um app separado ("Second Take Beta", ícone com faixa BETA, bundle id, ajustes, log e entrada no menu Iniciar próprios), que pode ficar instalado ao lado da versão estável sem substituí-la.
 - O Beta só avisa de novas betas (pré-releases `vX.Y.Z-beta.N`); a versão estável continua ignorando pré-releases.
 - Build automático do branch `beta` na pré-release `beta-build`.
-- **Manter o nome original** (Ajustes › Saída, desligado por padrão; CLI `--keep-names`): a saída sai como `C0001.MP4`, sem `_REPARADO`/`_RECONSTRUIDO`, para o relink direto no Resolve ou Premiere. O app recusa gravar na pasta dos originais nesse modo, para nunca substituí-los.
+- **Manter o nome original** (Ajustes › Saída, desligado por padrão; CLI `--keep-names`): a saída sai como `C0001.MP4`, sem `_REPARADO`/`_RECONSTRUIDO`, para o relink direto no Resolve ou Premiere. (Desde a 0.10.0b2, na pasta dos originais a saída vai para a subpasta `Second Take`.)
 - **XML de câmera junto da saída** também na reconstrução (antes só no reparo de cabeçalho), com o nome casando com o clipe novo (`C0001M01.XML`), para o Resolve/Catalyst lerem timecode, modelo e espaço de cor.
 - Mac: o item **Sobre** aparece sempre no menu do app; a janela Sobre do Beta se chama "Sobre o Second Take Beta".
 - `scripts/release.sh`: confere branch × canal, versão, CHANGELOG, tag nova, sincronia com o GitHub e testes antes de publicar.
 - Base para o suporte a outras câmeras além da Sony (em desenvolvimento).
+
+## 0.9.11 — 2026-11-17
+- **XAVC HS (H.265), primeiro passo**: o app reconhece clipes HEVC (`hvc1`/`hev1`) e mostra no Detalhes o perfil, o nível, a amostragem 4:2:2 e o 10-bit (lidos do `hvcC`). A prévia de 3 quadros e a **troca de cabeçalho** (cabeçalho corrompido, índice íntegro) funcionam, com preferência por uma referência também H.265.
+- **XAVC HS sem índice**: a reconstrução e a extração bruta ainda não entendem H.265. Esses clipes aparecem como "XAVC HS (H.265) sem índice: reconstrução ainda não suportada" e ficam fora do lote, em vez de passar pelo leitor H.264. O codec é detectado também pelo conteúdo do arquivo quando o índice e o XML sumiram, e uma referência H.265 nunca é usada para reconstruir um clipe H.264.
+- **Build reproduzível**: dependências do build e dos testes travadas com hash em `requirements-build.txt` (as mesmas versões da 0.9.10: CustomTkinter 6.0.0, PyInstaller 6.22.3, tkinterdnd2 0.7.0). Actions do GitHub fixadas por SHA; só o job que publica tem permissão de escrita.
+- **Teste de fumaça**: antes de publicar, o GitHub abre o app empacotado de verdade no macOS (a partir do `.zip` distribuído) e no Windows (`SECONDTAKE_SMOKE=1`, `scripts/smoke_test.py`).
+- **Release inteira ou nada**: macOS e Windows são gerados em paralelo e a release só é criada quando os dois passam. Antes, uma falha no Windows deixava a release como Latest só com os arquivos do Mac (foi o que aconteceu na 0.9.7).
+- **Windows: a janela podia nunca aparecer** quando o app abria sem a tela de apresentação. O `mainloop` do CustomTkinter, no Windows, esconde a janela para pintar a barra de título e não a mostrava de novo. A janela agora é revelada já dentro do `mainloop`. Quem achou foi o teste de fumaça do Windows, que agora confere se a janela foi exibida (`state`).
+- **FX30: clipes íntegros apareciam como "cabeçalho corrompido"**. O diagnóstico procurava o `mdat` numa posição fixa (262128, layout da FX3), mas a FX30 grava os dados a partir de 131072 e ainda põe uma box `meta` depois do `moov`. Agora o cabeçalho é validado pela estrutura (`ftyp` no início, boxes encadeadas até o `mdat`, índice apontando para dentro dele), o que vale para FX3, FX30, FX3A e outros layouts íntegros. Clipes FX30 sadios voltam a servir de referência.
+- **Troca de cabeçalho segura entre câmeras diferentes**: o início dos dados de cada clipe vem do próprio índice, e só serve de referência um clipe com o mesmo layout. Antes, com uma FX3 na pasta, o reparo de uma FX30 copiaria 256 KiB de cabeçalho por cima dos primeiros 128 KiB de dados da cópia. Sem referência compatível, o app avisa ("sem referência com o mesmo layout") em vez de gerar um arquivo estragado; forçar pela linha de comando também é recusado.
+- **SHA256SUMS.txt** em cada release e na pré-release da `main`, para conferir os downloads.
+- Empacotamento: o PyInstaller passa a levar `PIL._tkinter_finder` explicitamente (o hook do Pillow o deixava de fora; no Linux o ícone do cabeçalho quebrava a abertura).
+- **Relatório que não grava não some mais em silêncio** (auditoria B3): se o CSV do fim do lote não puder ser gravado (disco cheio, sem permissão, pasta removida), o erro vai para o log com o caminho e o traceback, e a barra de status mostra um aviso em laranja. Os clipes já recuperados não são afetados. Com "Salvar junto dos originais", uma pasta com problema não impede os relatórios das outras. Exportar CSV ganhou o mesmo tratamento.
+- **Mesmo tamanho na tabela e no Detalhes**: os dois (e os avisos de espaço livre) usam unidades decimais, como o Finder e os cartões (1 MB = 1.000.000 bytes). Antes a tabela dividia por 1024 e mostrava 768.7 MB para um clipe que o Detalhes mostrava como 806.0 MB.
+- **Detalhes do clipe**: painel 20 px mais largo, para formatos como `AVC200_3840_2160_H422P@L52` caberem numa linha; o **diagnóstico completo** aparece no topo dos metadados (na tabela ele é cortado na borda); quando os metadados não cabem na altura da janela, a área rola, com a barra aparecendo só nesse caso (a prévia continua fixa no topo).
+- **Último recurso sem referência**: quando não há referência válida e o clipe só pode ser extraído, selecionar a linha habilita o botão Reparar direto, sem passar pelo Avançado. A extração bruta continua fora da seleção automática, e a barra de status avisa "selecione a linha para extrair".
+- README atualizado (arquitetura, metadados/timecode/prévia, testes, build).
+
+## 0.9.10 — 2026-11-17
+- **Tela de apresentação**: ao abrir, aparece uma tela com o ícone, o nome e a versão, nas cores do tema do sistema. Fica pelo menos 1,2 s na tela (sem somar ao tempo de carregamento) e some com um fade curto; um clique nela pula a espera.
+- **Título da janela**: só "Second Take". A versão continua no cabeçalho e no Sobre.
+
+## 0.9.9 — 2026-11-17
+- **Prévia no Detalhes**: três quadros do clipe (10 %, 50 % e 90 %) no topo do painel, gerados em segundo plano pelo ffmpeg. Funciona com clipes íntegros, com cabeçalho danificado (os quadros são lidos direto pelo índice) e com o arquivo recuperado, que aparece logo depois do reparo. Em S-Log3 a imagem vem sem LUT, e o painel avisa.
+- **Datas do arquivo preservadas**: o recuperado fica com a data de modificação (e de acesso) do clipe original, então a ilha de edição ordena pela hora da filmagem e não pela hora do reparo.
+- **Timecode na extração bruta**: o MP4 limpo ganha uma trilha de timecode com o LTC do XML da câmera (com drop-frame em 29,97/59,94), desde que o começo da gravação tenha sido recuperado.
+- **Referência pela assinatura técnica**: o app compara modelo da câmera, codec XAVC, fps de gravação e de captura (S&Q), resolução e áudio, lidos do XML da Sony ou do índice do arquivo, e testa primeiro a referência idêntica. Quando ela explica o clipe inteiro, as outras nem são lidas, o que deixa a análise mais rápida em pastas grandes.
+
+## 0.9.8 — 2026-11-17
+- **Windows de volta**: a 0.9.7 saiu só para Mac, porque um teste novo usava um nome de pasta inválido no Windows (`|`) e derrubou o build do Windows. O teste foi corrigido; o app em si não muda em relação à 0.9.7.
+
+## 0.9.7 — 2026-11-17
+- **Sem arquivo cortado com nome de pronto**: o resultado é gravado primeiro num arquivo oculto `.part` e só recebe o nome final (`_REPARADO`, `_RECONSTRUIDO`, `_EXTRAIDO`) depois de gravado por inteiro no disco. Se o disco encher ou o SSD desconectar no meio, o `.part` é apagado e nada fica com cara de concluído.
+- **Nada é sobrescrito**: reparar de novo na mesma pasta de saída cria `_2`, `_3`… em vez de apagar o resultado anterior. O XML de câmera e os arquivos da extração (`.h264`, `.wav`, `.MP4`) recebem o mesmo número do clipe.
+- **Salvar junto dos originais**: nova chave no rodapé, logo abaixo da pasta de saída. Ligada, cada recuperado vai para a subpasta **Second Take** dentro da pasta do próprio clipe (com um relatório em cada uma), mesmo analisando arquivos de cartões diferentes. A escolha fica salva. Na linha de comando: `--beside` no lugar de `-o`.
+- **Nunca ao lado do original**: se a pasta de saída escolhida for a própria pasta dos clipes, o app também grava na subpasta **Second Take**. Ao analisar a pasta de novo, essa subpasta é ignorada.
+- **Espaço livre conferido por modo**: a extração bruta passa a exigir cerca de 3× o tamanho do clipe (antes, 1,05×, o que podia acabar com o disco cheio no meio).
+- **Verificação não trava mais**: o ffprobe e o ffmpeg têm limite de tempo proporcional ao tamanho do arquivo. Se o ffprobe não responder, a verificação é cancelada com um aviso e o arquivo recuperado continua salvo.
+- **Cancelar**: durante o reparo, o botão Reparar vira **Cancelar**. O clipe em andamento é interrompido e descartado (inclusive a verificação com ffprobe); os já reparados ficam, e o relatório é gravado com o que foi feito.
+- **Saída dentro da origem**: a checagem passou a comparar os caminhos reais (atalhos, maiúsculas/minúsculas, `/CLIP` × `/CLIPS`). A linha de comando também avisa.
+- **Análise mais rápida em pastas grandes**: o índice (`moov`) é procurado primeiro só no último 1 MB do arquivo (antes, sempre 16 MB), e o clipe de referência é lido uma vez só, mesmo quando serve a vários clipes.
+- **Segurança**: o relatório CSV neutraliza nomes de arquivo que o Excel/Numbers leriam como fórmula (`=`, `+`, `-`, `@`); o `config.json` é gravado de forma atômica e protegido contra gravações simultâneas; o XML da câmera é lido com `defusedxml` (nova dependência), que recusa entidades maliciosas.
+- **Mac**: os avisos de acesso a cartões/SSDs externos, volumes de rede e às pastas Mesa, Documentos e Transferências passam a explicar, em português e inglês, por que o app precisa do acesso.
+
+## 0.9.6 — 2026-11-16
+- Mac: o item **Sobre o Second Take** aparece sempre no menu do app, qualquer que seja a versão do Python/Tk usada no build (na 0.9.5 ele ainda faltava nos builds com Tk 8.6).
+
+## 0.9.5 — 2026-11-16
+- Mac: o item **Sobre o Second Take** voltou ao menu do app quando o app é gerado com Python/Tk 9 (Homebrew), que não cria esse item sozinho.
+- (A 0.9.4 foi retirada: saiu por engano com arquivos da versão beta.)
 
 ## 0.9.3 — 2026-11-16
 - **Arquivos .RSV**: o app passa a aceitar direto o arquivo temporário que as câmeras Sony deixam quando a gravação é interrompida (bateria, cartão removido, superaquecimento). Ele aparece como "Sem índice" e sai reconstruído como `_RECONSTRUIDO.MP4`. Funciona na análise de pasta, na escolha de arquivos e no arrastar e soltar.

@@ -16,6 +16,7 @@ import locale
 import os
 import subprocess
 import sys
+import threading
 
 from .channel import APP_NAME, FILE_PREFIX
 
@@ -53,6 +54,10 @@ CATALOG: dict[str, tuple[str, str]] = {
     'diag.header_manual': ('cabeçalho corrompido, índice íntegro — reparável (referência manual)',
                            'corrupted header, intact index — repairable (manual reference)'),
     'diag.silent': ('áudio em silêncio na gravação original', 'audio was already silent when recorded'),
+    'diag.hevc_rebuild': ('XAVC HS (H.265) sem índice: reconstrução ainda não suportada; a troca de cabeçalho funciona',
+                          'XAVC HS (H.265) without index: rebuild not supported yet; header repair works'),
+    'diag.no_ref_layout': ('sem referência com o mesmo layout na pasta (dados em {start}; FX3 = 262144, FX30 = 131072)',
+                           'no reference with the same layout in the folder (data at {start}; FX3 = 262144, FX30 = 131072)'),
     'diag.no_ref': ('sem clipe de referência válido na pasta', 'no valid reference clip in the folder'),
     'diag.error': ('erro: {err}', 'error: {err}'),
     'diag.rebuild': ('reconstrução: {secs} s recuperáveis ({chunks} blocos{extra}) — {reason}',
@@ -82,6 +87,12 @@ CATALOG: dict[str, tuple[str, str]] = {
     'err.ref_tracks': ('referência sem trilhas de vídeo e áudio', 'reference has no video and audio tracks'),
     'err.ref_layout': ('cabeçalho da referência fora do padrão XAVC S',
                        'reference header does not match the XAVC S layout'),
+    'err.hevc_ref': ('referência XAVC HS (H.265): a reconstrução ainda só lê H.264',
+                     'XAVC HS (H.265) reference: rebuild only reads H.264 for now'),
+    'err.hevc_rebuild': ('XAVC HS (H.265): só a troca de cabeçalho é suportada por enquanto',
+                         'XAVC HS (H.265): only header repair is supported for now'),
+    'err.ref_layout_mismatch': ('{ref} tem outro layout (dados em {a}; o clipe começa em {b}): escolha uma referência da mesma câmera',
+                                '{ref} has a different layout (data at {a}; the clip starts at {b}): pick a reference from the same camera'),
     'err.no_compatible': ('nenhuma referência compatível', 'no compatible reference'),
     'err.offset_mismatch': ('offset de dados diferente do cabeçalho da referência',
                             'data offset differs from the reference header'),
@@ -99,9 +110,13 @@ CATALOG: dict[str, tuple[str, str]] = {
     'verify.audio_peak': (' · áudio pico {db} dBFS', ' · audio peak {db} dBFS'),
     'verify.extracted': ('{n} quadros extraídos', '{n} frames extracted'),
     'verify.extracted_audio': (', {s} s de áudio', ', {s} s of audio'),
+    'verify.extracted_tc': (', timecode {tc}', ', timecode {tc}'),
     'verify.extracted_noaudio': (', sem áudio', ', no audio'),
     'verify.nothing': ('nenhum quadro H.264 válido encontrado — sem recuperação possível',
                        'no valid H.264 frames found — nothing recoverable'),
+    'verify.timeout': ('verificação cancelada: o ffprobe passou de {s} s sem responder (arquivo salvo, confira num player)',
+                       'verification cancelled: ffprobe took over {s} s without answering (file saved, check it in a player)'),
+    'verify.cancelled': ('cancelado: nada foi gravado para este clipe', 'cancelled: nothing was written for this clip'),
     'verify.error': ('ERRO: {err}', 'ERROR: {err}'),
 
     # ---- relatório CSV
@@ -148,8 +163,15 @@ CATALOG: dict[str, tuple[str, str]] = {
     'meta.color': ('Cor', 'Color'),
     'meta.audio': ('Áudio', 'Audio'),
     'meta.size': ('Tamanho', 'Size'),
+    'meta.diagnosis': ('Diagnóstico', 'Diagnosis'),
     'meta.none': ('Selecione um clipe para ver os detalhes.', 'Select a clip to see its details.'),
     'meta.copy': ('Copiar', 'Copy'),
+    'meta.preview': ('Prévia (10 % · 50 % · 90 %)', 'Preview (10% · 50% · 90%)'),
+    'meta.preview_loading': ('Gerando prévia…', 'Generating preview…'),
+    'meta.preview_after': ('A prévia aparece depois do reparo.', 'The preview appears after the repair.'),
+    'meta.preview_noff': ('Prévia indisponível: ffmpeg não encontrado.', 'Preview unavailable: ffmpeg not found.'),
+    'meta.preview_fail': ('Não foi possível gerar a prévia deste clipe.', 'Could not generate a preview for this clip.'),
+    'meta.preview_log': ('Imagem em S-Log3, sem LUT.', 'S-Log3 image, no LUT applied.'),
 
     # ---- CLI
     'cli.desc': ('Diagnóstico e recuperação de clipes Sony XAVC S corrompidos.',
@@ -160,6 +182,12 @@ CATALOG: dict[str, tuple[str, str]] = {
     'cli.targets': ('uma pasta, ou um ou mais arquivos', 'a folder, or one or more files'),
     'cli.csv': ('salva o diagnóstico em CSV', 'save the diagnosis as CSV'),
     'cli.output': ('pasta de saída', 'output folder'),
+    'cli.beside': ('grava cada recuperado em <pasta do clipe>/Second Take (em vez de -o)',
+                   "write each recovered file to <clip folder>/Second Take (instead of -o)"),
+    'cli.out_inside': ('aviso: a pasta de saída está dentro da pasta de origem ({path})',
+                       'warning: the output folder is inside the source folder ({path})'),
+    'cli.out_same': ('saída = pasta de origem: os recuperados vão para a subpasta "Second Take"',
+                     'output = source folder: recovered files go to the "Second Take" subfolder'),
     'cli.verify': ('confere os reparados com ffprobe', 'check repaired files with ffprobe'),
     'cli.mode': ('força um modo de reparo (padrão: automático)', 'force a repair mode (default: automatic)'),
     'cli.ref': ('clipe de referência manual', 'manual reference clip'),
@@ -200,6 +228,13 @@ CATALOG: dict[str, tuple[str, str]] = {
     'app.output': ('Saída', 'Output'),
     'app.change': ('Alterar', 'Change'),
     'app.verify_switch': ('Verificar com ffprobe', 'Verify with ffprobe'),
+    'app.cancel': ('Cancelar', 'Cancel'),
+    'app.cancelling': ('Cancelando… o clipe em andamento será descartado',
+                       'Cancelling… the clip in progress will be discarded'),
+    'app.cancelled': ('Cancelado: {n} de {total} clipe(s) processado(s) · {report} gravado em {path}',
+                      'Cancelled: {n} of {total} clip(s) processed · {report} written to {path}'),
+    'app.beside_switch': ('Salvar junto dos originais', 'Save next to originals'),
+    'app.out_beside': ('Pasta de cada clipe › Second Take', "Each clip's folder › Second Take"),
     'app.ready': ('Pronto.', 'Ready.'),
     'app.open_out': ('Abrir saída', 'Open output'),
     'app.export': ('Exportar CSV', 'Export CSV'),
@@ -223,11 +258,15 @@ CATALOG: dict[str, tuple[str, str]] = {
                     'Repair {n} clip(s)?\n\n{size} will be written to:\n{path}'),
     'app.intact': ('{name} está íntegro — nada a ajustar.', '{name} is intact — nothing to adjust.'),
     'app.saved': ('Relatório salvo em {path}', 'Report saved to {path}'),
+    'app.report_failed': ('{n} clipe(s) processado(s) · relatório CSV não gravado: {err}. Os recuperados estão salvos; detalhes no log',
+                          '{n} clip(s) processed · CSV report not saved: {err}. Recovered files are safe; details in the log'),
+    'app.export_failed': ('Relatório não salvo: {err}. Detalhes no log', 'Report not saved: {err}. Details in the log'),
     'app.analyzing': ('Analisando {i}/{n} · {name}', 'Analyzing {i}/{n} · {name}'),
     'app.done_scan': ('{n} clipe(s) analisado(s). ', '{n} clip(s) analyzed. '),
     'app.ready_n': ('{n} pronto(s) para reparar.', '{n} ready to repair.'),
     'app.nothing': ('Nada para reparar automaticamente.', 'Nothing to repair automatically.'),
-    'app.extract_n': (' {n} só por extração bruta.', ' {n} only by raw extraction.'),
+    'app.extract_n': (' {n} só por extração bruta (selecione a linha para extrair).',
+                      ' {n} only by raw extraction (select the row to extract).'),
     'app.repairing': ('Reparando {name}…', 'Repairing {name}…'),
     'app.verifying': ('Verificando {name}…', 'Verifying {name}…'),
     'app.done_fix': ('{n} clipe(s) processado(s) · {report} gravado em {path}',
@@ -244,12 +283,6 @@ CATALOG: dict[str, tuple[str, str]] = {
                         'A pasta de saída precisa ser diferente da pasta dos originais.',
                         'No _REPARADO/_RECONSTRUIDO suffix, so Resolve or Premiere can relink. '
                         'The output folder must differ from the originals folder.'),
-    'err.same_folder': ('{name}: com "manter o nome original", a saída não pode ficar na mesma pasta do original.',
-                        '{name}: with "keep the original names", the output can\'t be in the same folder as the original.'),
-    'app.keep_same_folder': ('Com "manter o nome original" ligado, a pasta de saída não pode ser a mesma dos clipes '
-                             'originais (eles seriam substituídos). Escolha outra pasta de saída.',
-                             'With "keep the original names" on, the output folder can\'t be the originals folder '
-                             '(they would be overwritten). Choose another output folder.'),
     'cli.keep_names': ('mantém o nome original dos clipes (sem _REPARADO/_RECONSTRUIDO)',
                        'keep the original clip names (no _REPARADO/_RECONSTRUIDO suffix)'),
     'upd.menu': ('Verificar atualizações…', 'Check for Updates…'),
@@ -341,8 +374,8 @@ CATALOG: dict[str, tuple[str, str]] = {
     'adv.other': ('Outro…', 'Other…'),
     'adv.offset': ('Início dos dados', 'Data start'),
     'adv.offset_ph': ('automático', 'automatic'),
-    'adv.offset_hint': ('bytes · vazio = automático (262144 nas Sony XAVC S)',
-                        'bytes · empty = automatic (262144 on Sony XAVC S)'),
+    'adv.offset_hint': ('bytes · vazio = automático (262144 na FX3, 131072 na FX30)',
+                        'bytes · empty = automatic (262144 on FX3, 131072 on FX30)'),
     'adv.simulate': ('Simular', 'Simulate'),
     'adv.apply': ('Aplicar', 'Apply'),
     'adv.pick_ref': ('Clipe de referência', 'Reference clip'),
@@ -455,23 +488,39 @@ def _config_path() -> str:
     return os.path.join(base, 'config.json')
 
 
+_CONFIG_LOCK = threading.RLock()     # a thread do updater e a interface gravam o mesmo arquivo
+
+
 def load_config() -> dict:
-    try:
-        with open(_config_path(), encoding='utf-8') as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    with _CONFIG_LOCK:
+        try:
+            with open(_config_path(), encoding='utf-8') as f:
+                cfg = json.load(f)
+            return cfg if isinstance(cfg, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
 
 def save_config(**values):
-    cfg = load_config()
-    cfg.update(values)
-    try:
-        os.makedirs(os.path.dirname(_config_path()), exist_ok=True)
-        with open(_config_path(), 'w', encoding='utf-8') as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except OSError:
-        pass
+    """Ler-mesclar-gravar sob trava, gravando num .tmp e trocando com os.replace:
+    um app fechado no meio da gravação nunca deixa o config.json pela metade."""
+    with _CONFIG_LOCK:
+        cfg = load_config()
+        cfg.update(values)
+        path = _config_path()
+        tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 def system_lang() -> str:

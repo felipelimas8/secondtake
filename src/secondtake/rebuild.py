@@ -15,10 +15,12 @@ completo. Originais nunca são alterados.
 from __future__ import annotations
 
 import os
+import re
 import struct
 from dataclasses import dataclass
 
 from .i18n import L, msg
+from .safeio import atomic_write, fsync_path, part_path, unique_stem
 
 CONTAINERS = {b'moov', b'trak', b'edts', b'mdia', b'minf', b'stbl', b'dinf'}
 
@@ -128,7 +130,34 @@ def _expand(entries):
     return out
 
 
+_PROFILE_CACHE: dict[tuple, 'Profile'] = {}
+_PROFILE_CACHE_MAX = 64
+
+
 def load_profile(ref_path: str, find_moov) -> Profile:
+    """Perfil de um clipe de referência, com cache por (caminho real, tamanho, data de
+    modificação): numa pasta grande a mesma referência é testada para vários clipes.
+    O Profile não é alterado depois de criado (build_moov copia o moov), então é seguro reusar."""
+    try:
+        st = os.stat(ref_path)
+        key = (os.path.realpath(ref_path), st.st_size, st.st_mtime_ns, getattr(find_moov, '__name__', ''))
+    except OSError:
+        key = None
+    if key is not None and key in _PROFILE_CACHE:
+        return _PROFILE_CACHE[key]
+    prof = _load_profile(ref_path, find_moov)
+    if key is not None:
+        if len(_PROFILE_CACHE) >= _PROFILE_CACHE_MAX:
+            _PROFILE_CACHE.pop(next(iter(_PROFILE_CACHE)))
+        _PROFILE_CACHE[key] = prof
+    return prof
+
+
+def clear_profile_cache():
+    _PROFILE_CACHE.clear()
+
+
+def _load_profile(ref_path: str, find_moov) -> Profile:
     pos, raw = find_moov(ref_path)
     moov = Box.parse(raw)[0]
     traks = {}
@@ -140,6 +169,9 @@ def load_profile(ref_path: str, find_moov) -> Profile:
         raise ValueError(L('err.ref_tracks'))
     vst = v.find(b'mdia', b'minf', b'stbl')
     ast = a.find(b'mdia', b'minf', b'stbl')
+    if video_family(vst.find(b'stsd').data) == 'hevc':
+        # XAVC HS: a varredura de blocos ainda só entende NAL H.264 (ver hvcc_params)
+        raise ValueError(L('err.hevc_ref'))
     G = _table(vst.find(b'stsc'), 3)[0][1]
     audio_spc = _table(ast.find(b'stsc'), 3)[0][1]
     asd = ast.find(b'stsd').data
@@ -445,6 +477,20 @@ class Plan:
         return len(self.chunks) * self.profile.G * self.profile.v_delta / self.profile.v_ts
 
 
+def _min_chunk(prof: 'Profile') -> int:
+    """Menor tamanho possível de um bloco (rtmd + áudio, sem contar o vídeo): perder menos
+    que isso no começo não pode ser um bloco inteiro."""
+    return prof.G * prof.meta_size + prof.audio_chunk
+
+
+def starts_at_first_chunk(p: 'Plan') -> bool:
+    """O 1º bloco recuperado é o 1º gravado? (no máximo uma fração de bloco perdida no início,
+    ex.: um SEI antes do 1º AUD). Só assim o timecode do XML vale para o 1º quadro."""
+    if not p.chunks:
+        return False
+    return p.chunks[0].meta_off - p.data_start < _min_chunk(p.profile)
+
+
 def plan(path: str, refs: list[str], find_moov, data_start: int | None = None) -> Plan:
     """Testa cada referência e fica com a que explica mais blocos do arquivo."""
     best, seen, errors = None, {}, []
@@ -462,6 +508,11 @@ def plan(path: str, refs: list[str], find_moov, data_start: int | None = None) -
         chunks, end, reason, gaps = scan_chunks(path, prof, start)
         if best is None or (len(chunks), prof.n_keys) > (len(best.chunks), best.profile.n_keys):
             best = Plan(prof, chunks, end, reason, start, gaps)
+        # as referências chegam em ordem de assinatura (XML/moov): se esta já explica o arquivo
+        # inteiro, sem trechos pulados e com GOP confiável, não precisa testar as outras
+        if chunks and prof.n_keys >= 2 and getattr(reason, 'key', '') == 'reason.end' \
+                and sum(b - a for a, b in gaps) < _min_chunk(prof):
+            break
     if best is None or not best.chunks:
         from .i18n import Join
         raise ValueError(Join(L('err.no_compatible'), best.reason if best is not None else '', sep=' — '))
@@ -481,7 +532,7 @@ def write(path: str, p: Plan, dst: str, chunk_cb=None) -> str:
     moov = build_moov(prof, p.chunks)
     total = p.data_end - p.data_start
     copied = 0
-    with open(path, 'rb') as src, open(dst, 'wb') as out:
+    with open(path, 'rb') as src, atomic_write(dst) as out:
         out.write(hdr)
         src.seek(p.data_start)
         left = total
@@ -526,15 +577,81 @@ def avcc_params(stsd_data: bytes) -> tuple[list[bytes], list[bytes]]:
 
 SC = b'\x00\x00\x00\x01'
 
+AVC_FORMATS = (b'avc1', b'avc3')
+HEVC_FORMATS = (b'hvc1', b'hev1')     # XAVC HS (H.265)
 
-def _au_to_annexb(au: bytes, params: bytes) -> bytes:
-    out, p, idr = [], 0, False
+
+def video_family(stsd_data: bytes) -> str:
+    """'avc', 'hevc' ou '' a partir do stsd do vídeo (1ª entrada da descrição de amostra)."""
+    fmt = stsd_data[12:16]
+    if fmt in HEVC_FORMATS:
+        return 'hevc'
+    if fmt in AVC_FORMATS:
+        return 'avc'
+    return ''
+
+
+# NAL com prefixo de tamanho de 4 bytes, como no mdat: AUD H.264 (tipo 9) e, no H.265,
+# AUD (35), VPS (32) e SPS (33), cujo cabeçalho de 2 bytes é (tipo << 1, 0x01). Padrões de
+# 6-7 bytes: num XAVC S-I de 600 Mb/s, 32 MB são poucos quadros e não há margem para acaso.
+_AVC_RE = re.compile(rb'\x00\x00\x00[\x02\x03]\x09[\x10\x30\x50\x70\x90\xb0\xd0\xf0]')
+_HEVC_RE = re.compile(rb'\x00\x00\x00[\x03\x04]\x46\x01[\x10\x30\x50]'
+                       rb'|\x00\x00\x00[\x10-\x7f]\x40\x01\x0c'
+                       rb'|\x00\x00\x00[\x20-\xff]\x42\x01\x01')
+
+
+def sniff_video_family(path: str, start: int = 262144, length: int = 32 << 20) -> str:
+    """Codec do vídeo pelo conteúdo do mdat, para clipes sem índice: conta inícios de AU
+    H.264 e H.265 nos primeiros MB de dados. '' se não houver evidência clara."""
+    try:
+        with open(path, 'rb') as f:
+            f.seek(start)
+            buf = f.read(length)
+    except OSError:
+        return ''
+    avc = len(_AVC_RE.findall(buf))
+    hevc = len(_HEVC_RE.findall(buf))
+    if hevc and hevc >= 2 * avc:
+        return 'hevc'
+    if avc and avc >= 2 * hevc:
+        return 'avc'
+    return ''
+
+
+def hvcc_params(stsd_data: bytes) -> list[bytes]:
+    """VPS, SPS, PPS (e SEI de prefixo) do hvcC, na ordem gravada. [] se não houver hvcC."""
+    i = stsd_data.find(b'hvcC')
+    if i < 0:
+        return []
+    p = i + 4 + 22
+    out = []
+    try:
+        n_arrays = stsd_data[p]
+        p += 1
+        for _ in range(n_arrays):
+            n = struct.unpack('>H', stsd_data[p + 1:p + 3])[0]
+            p += 3
+            for _ in range(n):
+                ln = struct.unpack('>H', stsd_data[p:p + 2])[0]
+                nal = stsd_data[p + 2:p + 2 + ln]
+                if len(nal) != ln:
+                    return out
+                out.append(nal)
+                p += 2 + ln
+    except (IndexError, struct.error):
+        pass
+    return out
+
+
+def _au_to_annexb(au: bytes, params: bytes, idr=lambda nal: nal[0] & 0x1F == 5) -> bytes:
+    """AU com prefixo de tamanho -> Annex B; `params` entra antes do 1º NAL em que idr(nal)."""
+    out, p, seen = [], 0, False
     while p + 4 <= len(au):
         n = struct.unpack('>I', au[p:p + 4])[0]
         nal = au[p + 4:p + 4 + n]
-        if nal and nal[0] & 0x1F == 5 and not idr:
+        if nal and idr(nal) and not seen:
             out.append(params)
-            idr = True
+            seen = True
         out.append(SC + nal)
         p += 4 + n
     return b''.join(out)
@@ -548,27 +665,29 @@ def _wav_header(n_bytes: int, rate: int, ch: int, bits: int) -> bytes:
 
 
 def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
-                profile: Profile | None = None, progress=None) -> dict:
+                profile: Profile | None = None, progress=None, timecode: str = '') -> dict:
     """Último recurso: grava o vídeo como stream H.264 (.h264) e o áudio como .wav,
     e monta um MP4 limpo (com ffmpeg, se houver). Com um Plan (layout conhecido),
     áudio e vídeo saem completos; sem Plan, varre o arquivo atrás de quadros H.264
     válidos e recupera só o vídeo."""
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(path))[0]
-    h264 = os.path.join(out_dir, f'{stem}_EXTRAIDO.h264')
+    # um só número para o trio .h264/.wav/.MP4 (C0001_EXTRAIDO_2.*), sem sobrescrever nada
+    base = unique_stem(out_dir, f'{stem}_EXTRAIDO', ['.h264', '.wav', '.MP4'])
+    h264 = base + '.h264'
     prof = plan_.profile if plan_ else profile
     params = b''
     if prof:
         sps, pps = avcc_params(prof.video_stsd)
         params = b''.join(SC + x for x in sps + pps)
-    res = {'h264': h264, 'wav': None, 'mov': None, 'frames': 0, 'audio_s': 0.0}
+    res = {'h264': h264, 'wav': None, 'mov': None, 'frames': 0, 'audio_s': 0.0, 'timecode': ''}
     samples: list[tuple[int, int, bool]] = []
     size = os.path.getsize(path)
-    with open(path, 'rb') as f, open(h264, 'wb') as out:
+    with open(path, 'rb') as f, atomic_write(h264) as out:
         if params:
             out.write(params)
         if plan_:
-            wav = os.path.join(out_dir, f'{stem}_EXTRAIDO.wav')
+            wav = base + '.wav'
             ch, bits = 2, 16
             asd = None
             for t in prof.moov.all(b'trak'):
@@ -578,7 +697,7 @@ def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
                 ch, bits = struct.unpack('>HH', asd[8 + 24:8 + 28])
             fmt = asd[12:16] if asd else b'twos'
             total = len(plan_.chunks) * prof.audio_chunk
-            with open(wav, 'wb') as w:
+            with atomic_write(wav) as w:
                 w.write(_wav_header(total, prof.a_ts, ch, bits))
                 for i, c in enumerate(plan_.chunks):
                     p = c.video_off
@@ -643,13 +762,18 @@ def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
         os.remove(h264)
         res['h264'] = None
         return res
-    mov = os.path.join(out_dir, f'{stem}_EXTRAIDO.MP4')
+    mov = base + '.MP4'
     if plan_ is not None:
         # layout conhecido: monta o MP4 completo e copia só vídeo+áudio para um MP4 limpo
-        tmp = os.path.join(out_dir, f'.{stem}_tmp.MP4')
+        tmp = os.path.join(out_dir, f'.{os.path.basename(base)}_tmp.MP4')
         try:
             write(path, plan_, tmp)
-            if _ffmpeg_copy(tmp, mov):
+            # o timecode do XML só vale se o 1º quadro recuperado é o 1º quadro gravado
+            tc = timecode if starts_at_first_chunk(plan_) else ''
+            if _ffmpeg_copy(tmp, mov, tc):
+                res['mov'] = mov
+                res['timecode'] = tc
+            elif tc and _ffmpeg_copy(tmp, mov):      # timecode recusado pelo ffmpeg: MP4 sem tmcd
                 res['mov'] = mov
         finally:
             if os.path.exists(tmp):
@@ -665,16 +789,34 @@ def _ffmpeg():
     return ffmpeg_bin('ffmpeg')
 
 
-def _ffmpeg_copy(src: str, dst: str) -> bool:
+def _ffmpeg_copy(src: str, dst: str, timecode: str = '') -> bool:
+    """Copia vídeo + áudio para um MP4 limpo (sem recodificar). Com `timecode`
+    (HH:MM:SS:FF, ou ;FF em drop-frame), grava também uma trilha tmcd."""
     import sys
     ff = _ffmpeg()
     if not ff:
         return False
     import subprocess
+    from .core import ffmpeg_timeout
     kw = {'creationflags': 0x08000000} if sys.platform == 'win32' else {}  # sem janela de console
-    r = subprocess.run([ff, '-v', 'error', '-y', '-i', src, '-map', '0:v:0', '-map', '0:a?',
-                        '-c', 'copy', dst], capture_output=True, **kw)
-    return r.returncode == 0
+    tmp = part_path(dst)
+    ok = False
+    try:
+        # grava no .part (com -f mp4, já que a extensão .part não diz o formato) e só renomeia no fim
+        r = subprocess.run([ff, '-v', 'error', '-y', '-i', src, '-map', '0:v:0', '-map', '0:a?',
+                            '-c', 'copy'] + (['-timecode', timecode] if timecode else [])
+                           + ['-f', 'mp4', tmp], capture_output=True,
+                           timeout=ffmpeg_timeout(os.path.getsize(src)), **kw)
+        if r.returncode == 0 and os.path.exists(tmp):
+            fsync_path(tmp)
+            os.replace(tmp, dst)
+            ok = True
+    except (subprocess.TimeoutExpired, OSError):
+        ok = False
+    finally:
+        if not ok and os.path.exists(tmp):
+            os.remove(tmp)
+    return ok
 
 
 def _has_idr(au: bytes) -> bool:
@@ -738,7 +880,7 @@ def write_video_mp4(path: str, samples: list[tuple[int, int, bool]], prof: Profi
         r = _rle(ctts)
         e[b'ctts'] = _full(0, struct.pack('>I', len(r)) + b''.join(struct.pack('>II', a, b) for a, b in r))
     _stbl_tables(t.find(b'mdia', b'minf', b'stbl'), e)
-    with open(path, 'rb') as src, open(dst, 'wb') as out:
+    with open(path, 'rb') as src, atomic_write(dst) as out:
         out.write(ftyp)
         out.write(struct.pack('>I4sQ', 1, b'mdat', 16 + p - data_off))
         for off, ln, _ in samples:

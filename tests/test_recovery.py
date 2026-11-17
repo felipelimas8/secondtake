@@ -304,16 +304,281 @@ def test_default_names_copy_xml_on_rebuild(work):
     assert os.path.isfile(os.path.join(work['out'], 'C0002_RECONSTRUIDOM01.XML'))
 
 
-def test_keep_names_refuses_originals_folder(work):
+def test_keep_names_in_originals_folder_goes_to_subfolder(work):
+    """Manter o nome na pasta dos originais: vai para a subpasta Second Take, nunca por cima."""
     scramble(work['victim'], 0, core.HDR, seed=1)
     before = open(work['victim'], 'rb').read()
     c = by_name(core.scan(work['dir']), 'C0002.MP4')
-    with pytest.raises(ValueError):
-        core.repair(c, work['dir'], keep_names=True)
+    out = core.repair(c, work['dir'], keep_names=True)
+    assert out == os.path.join(work['dir'], core.SAME_FOLDER_DIR, 'C0002.MP4')
     assert open(work['victim'], 'rb').read() == before                 # original intacto
+    c2 = by_name(core.scan(work['dir']), 'C0002.MP4')                 # de novo: numera, não sobrescreve
+    assert os.path.basename(core.repair(c2, work['dir'], keep_names=True)) == 'C0002_2.MP4'
 
 
 def test_cli_keep_names(work):
     scramble(work['victim'], 0, core.HDR, seed=1)
     cli.main(['repair', work['dir'], '-o', work['out'], '--keep-names'])
     assert os.path.isfile(os.path.join(work['out'], 'C0002.MP4'))
+
+
+# ---------------------------------------------------------------- escrita segura (0.9.7)
+
+def _prepare(work, mode):
+    """Clipe danificado pronto para `core.repair` no modo pedido."""
+    ref = os.path.join(work['dir'], 'C0001.MP4')
+    if mode == 'cabecalho':
+        scramble(work['victim'], 0, core.HDR, seed=11)
+        return by_name(core.scan(work['dir']), 'C0002.MP4')
+    strip_moov(work['victim'], work['info'])
+    c = core.diagnose(work['victim'])
+    core.plan_rebuild(c, [ref])
+    if mode == 'extrair':
+        core.set_extract(c, [ref])
+    return c
+
+
+@pytest.mark.parametrize('mode', ['cabecalho', 'reconstruir', 'extrair'])
+def test_write_error_leaves_no_truncated_output(work, mode):
+    """Disco cheio / SSD desconectado no meio da escrita: nada com nome final, nem .part."""
+    c = _prepare(work, mode)
+    assert c.extra.get('mode', 'cabecalho') == mode
+    calls = []
+
+    def boom(done, total):
+        calls.append(done)
+        # chamado depois de cada bloco gravado: já há dados no disco quando falha
+        raise OSError(28, 'No space left on device')
+
+    with pytest.raises(OSError):
+        core.repair(c, work['out'], boom)
+    assert len(calls) == 1
+    assert os.listdir(work['out']) == []
+    assert not c.output
+
+
+def test_atomic_write_removes_part_on_error(tmp_path):
+    from secondtake.safeio import atomic_write, part_path
+    dst = str(tmp_path / 'C0001_REPARADO.MP4')
+    with pytest.raises(RuntimeError):
+        with atomic_write(dst) as f:
+            f.write(b'x' * 1000)
+            assert os.path.exists(part_path(dst))
+            raise RuntimeError('falhou no meio')
+    assert os.listdir(tmp_path) == []
+    with atomic_write(dst) as f:
+        f.write(b'ok')
+    assert os.listdir(tmp_path) == ['C0001_REPARADO.MP4']
+    assert open(dst, 'rb').read() == b'ok'
+
+
+def test_existing_output_gets_numbered_suffix(work):
+    """Reparar de novo na mesma pasta cria _2, sem tocar no resultado anterior."""
+    scramble(work['victim'], 0, core.HDR, seed=12)
+    c = by_name(core.scan(work['dir']), 'C0002.MP4')
+    first = core.repair(c, work['out'])
+    assert os.path.basename(first) == 'C0002_REPARADO.MP4'
+    before = hashlib.md5(open(first, 'rb').read()).hexdigest()
+    second = core.repair(c, work['out'])
+    assert os.path.basename(second) == 'C0002_REPARADO_2.MP4'
+    third = core.repair(c, work['out'])
+    assert os.path.basename(third) == 'C0002_REPARADO_3.MP4'
+    assert hashlib.md5(open(first, 'rb').read()).hexdigest() == before
+    got, err = frame_md5s(second)
+    assert err == 0 and got == work['golden']
+
+
+def test_extract_twice_numbers_the_whole_set(work):
+    """Extração: .h264, .wav e .MP4 ganham o mesmo número."""
+    c = _prepare(work, 'extrair')
+    core.repair(c, work['out'])
+    out2 = core.repair(c, work['out'])
+    assert os.path.basename(out2) == 'C0002_EXTRAIDO_2.MP4'
+    names = set(os.listdir(work['out']))
+    for ext in ('.h264', '.wav', '.MP4'):
+        assert f'C0002_EXTRAIDO{ext}' in names and f'C0002_EXTRAIDO_2{ext}' in names
+    assert not [n for n in names if n.endswith('.part') or n.startswith('.')]
+
+
+def test_unique_path_skips_existing_and_in_progress(tmp_path):
+    from secondtake.safeio import part_path, unique_path, unique_stem
+    p = str(tmp_path / 'C0001_REPARADO.MP4')
+    assert unique_path(p) == p
+    open(p, 'wb').close()
+    open(part_path(str(tmp_path / 'C0001_REPARADO_2.MP4')), 'wb').close()   # outra gravação em curso
+    assert unique_path(p) == str(tmp_path / 'C0001_REPARADO_3.MP4')
+    # o XML existente também reserva o número
+    open(tmp_path / 'C0009_REPARADOM01.XML', 'wb').close()
+    assert unique_stem(str(tmp_path), 'C0009_REPARADO', ['.MP4', 'M01.XML']) == str(tmp_path / 'C0009_REPARADO_2')
+
+
+def test_space_needed_depends_on_mode():
+    a = core.Clip('/x/C0001.MP4', 1_000_000, core.HEADER)
+    a.extra['mode'] = 'cabecalho'
+    b = core.Clip('/x/C0002.MP4', 1_000_000, core.NO_MOOV)
+    b.extra['mode'] = 'reconstruir'
+    e = core.Clip('/x/C0003.MP4', 1_000_000, core.NO_MOOV)
+    e.extra['mode'] = 'extrair'
+    assert core.space_needed([a]) == 1_050_000
+    assert core.space_needed([b]) == 1_050_000
+    assert core.space_needed([e]) == 3_000_000
+    assert core.space_needed([a, b, e]) == 5_100_000
+
+
+# ---------------------------------------------------------------- timeouts (0.9.7)
+
+def test_ffprobe_timeout_does_not_hang(work, monkeypatch):
+    """Um ffprobe que não responde é encerrado e vira aviso, sem travar o reparo."""
+    import sys
+    import time
+    scramble(work['victim'], 0, core.HDR, seed=13)
+    c = by_name(core.scan(work['dir']), 'C0002.MP4')
+    core.repair(c, work['out'])
+    real_run = core.run_quiet
+    seen = {}
+
+    def hung_ffprobe(cmd, **kw):
+        seen.update(kw)                         # mesmo timeout/flags que o verify passaria
+        return real_run([sys.executable, '-c', 'import time; time.sleep(60)'], **kw)
+
+    monkeypatch.setattr(core, 'ffmpeg_bin', lambda name='ffmpeg': sys.executable)
+    monkeypatch.setattr(core, 'run_quiet', hung_ffprobe)
+    monkeypatch.setattr(core, 'ffprobe_timeout', lambda size: 1.0)
+    t0 = time.monotonic()
+    v = core.verify(c)
+    assert time.monotonic() - t0 < 20
+    assert seen.get('timeout') == 1.0
+    assert 'cancelada' in str(v)
+    assert os.path.exists(c.output)              # o arquivo recuperado continua lá
+
+
+def test_ffprobe_timeout_scales_with_size():
+    assert core.ffprobe_timeout(0) == core.FFPROBE_BASE_S
+    assert core.ffprobe_timeout(45_000_000_000) > core.ffprobe_timeout(1_000_000_000) > 60
+
+
+def test_ffmpeg_copy_timeout_cleans_up(work, monkeypatch):
+    monkeypatch.setattr(core, 'ffmpeg_timeout', lambda size: 0.001)
+    dst = os.path.join(work['dir'], 'saida.MP4')
+    assert rb._ffmpeg_copy(work['victim'], dst) is False
+    assert not os.path.exists(dst)
+    assert not [n for n in os.listdir(work['dir']) if n.endswith('.part')]
+
+
+# ---------------------------------------------------------------- saída na pasta dos originais (0.9.7)
+
+def test_output_in_source_folder_goes_to_subfolder(work):
+    """Saída = pasta dos originais: grava em 'Second Take/', nunca ao lado do original."""
+    scramble(work['victim'], 0, core.HDR, seed=14)
+    before = set(os.listdir(work['dir']))
+    c = by_name(core.scan(work['dir']), 'C0002.MP4')
+    out = core.repair(c, work['dir'])
+    assert out == os.path.join(work['dir'], 'Second Take', 'C0002_REPARADO.MP4')
+    assert set(os.listdir(work['dir'])) == before | {'Second Take'}
+    got, err = frame_md5s(out)
+    assert err == 0 and got == work['golden']
+    # a análise da pasta ignora a subpasta: só os originais aparecem
+    assert sorted(x.name for x in core.scan(work['dir'])) == ['C0001.MP4', 'C0002.MP4']
+
+
+def test_source_folder_check_with_trailing_slash(work):
+    sub = core.clip_out_dir(work['victim'], work['dir'] + os.sep)
+    assert sub == os.path.join(work['dir'] + os.sep, 'Second Take')
+    assert core.clip_out_dir(work['victim'], work['out']) == work['out']
+
+
+def test_cli_output_in_source_folder(work):
+    scramble(work['victim'], 0, core.HDR, seed=15)
+    assert cli.main(['repair', work['dir'], '-o', work['dir']]) == 0
+    sub = os.path.join(work['dir'], 'Second Take')
+    assert os.path.exists(os.path.join(sub, 'C0002_REPARADO.MP4'))
+    assert os.path.exists(os.path.join(sub, 'relatorio_reparo.csv'))
+    assert not os.path.exists(os.path.join(work['dir'], 'relatorio_reparo.csv'))
+
+
+def test_cli_beside_saves_in_each_clip_folder(work, tmp_path, clips):
+    """--beside: cada recuperado vai para <pasta do clipe>/Second Take, com um relatório por pasta."""
+    scramble(work['victim'], 0, core.HDR, seed=16)
+    card_b = tmp_path / 'cartao_b'
+    card_b.mkdir()
+    shutil.copy(clips['ref']['path'], card_b / 'C0001.MP4')
+    other = card_b / 'C0005.MP4'
+    shutil.copy(clips['good']['path'], other)
+    scramble(str(other), 0, core.HDR, seed=17)
+    rc = cli.main(['repair', work['victim'], str(other), '--beside'])
+    assert rc == 0
+    for d, name in ((work['dir'], 'C0002'), (str(card_b), 'C0005')):
+        sub = os.path.join(d, 'Second Take')
+        assert sorted(os.listdir(sub)) == sorted([f'{name}_REPARADO.MP4', 'relatorio_reparo.csv'])
+        got, err = frame_md5s(os.path.join(sub, f'{name}_REPARADO.MP4'))
+        assert err == 0 and got == work['golden']
+
+
+def test_cli_needs_output_or_beside(work):
+    with pytest.raises(SystemExit):
+        cli.main(['repair', work['dir']])
+    with pytest.raises(SystemExit):
+        cli.main(['repair', work['dir'], '-o', work['out'], '--beside'])
+
+
+def test_group_by_folder_and_beside_dir(tmp_path):
+    a = core.Clip(str(tmp_path / 'A' / 'C0001.MP4'), 1)
+    b = core.Clip(str(tmp_path / 'B' / 'C0002.MP4'), 1)
+    c = core.Clip(str(tmp_path / 'A' / 'C0003.MP4'), 1)
+    g = core.group_by_folder([a, b, c])
+    assert list(g) == [str(tmp_path / 'A'), str(tmp_path / 'B')]
+    assert g[str(tmp_path / 'A')] == [a, c]
+    assert core.beside_dir(a.path) == str(tmp_path / 'A' / 'Second Take')
+
+
+# ---------------------------------------------------------------- cancelar e cache (blindagem)
+
+@pytest.mark.parametrize('mode', ['cabecalho', 'reconstruir', 'extrair'])
+def test_cancel_mid_write_discards_clip(work, mode):
+    """Cancelar no meio de um clipe: o .part é apagado e nada fica na saída."""
+    c = _prepare(work, mode)
+
+    def cancel(done, total):
+        raise core.Cancelled()
+
+    with pytest.raises(core.Cancelled):
+        core.repair(c, work['out'], cancel)
+    assert os.listdir(work['out']) == []
+
+
+def test_reference_profile_is_cached(work, monkeypatch):
+    ref = os.path.join(work['dir'], 'C0001.MP4')
+    rb.clear_profile_cache()
+    calls = []
+    real = rb._load_profile
+    monkeypatch.setattr(rb, '_load_profile', lambda p, fm: calls.append(p) or real(p, fm))
+    a = rb.load_profile(ref, core.find_moov)
+    b = rb.load_profile(ref, core.find_moov)
+    assert a is b and len(calls) == 1
+    os.utime(ref, ns=(0, 10**9))                 # arquivo trocado: lê de novo
+    rb.load_profile(ref, core.find_moov)
+    assert len(calls) == 2
+
+
+def test_scan_reuses_reference_for_many_clips(work, clips, monkeypatch):
+    """Pasta com vários clipes sem índice: a referência é lida uma vez só."""
+    for n in (3, 4, 5):
+        dst = os.path.join(work['dir'], f'C000{n}.MP4')
+        shutil.copy(clips['good']['path'], dst)
+        strip_moov(dst, work['info'])
+    strip_moov(work['victim'], work['info'])
+    rb.clear_profile_cache()
+    calls = []
+    real = rb._load_profile
+    monkeypatch.setattr(rb, '_load_profile', lambda p, fm: calls.append(p) or real(p, fm))
+    found = core.scan(work['dir'])
+    assert sum(1 for c in found if c.extra.get('mode') == 'reconstruir') == 4
+    assert calls.count(os.path.join(work['dir'], 'C0001.MP4')) == 1
+
+
+def test_cli_warns_when_output_inside_source(work, capsys):
+    scramble(work['victim'], 0, core.HDR, seed=18)
+    out = os.path.join(work['dir'], 'saida')
+    assert cli.main(['repair', work['dir'], '-o', out]) == 0
+    assert 'dentro da pasta de origem' in capsys.readouterr().err
+    assert os.path.exists(os.path.join(out, 'C0002_REPARADO.MP4'))

@@ -1,0 +1,19 @@
+# Entrada do lockfile requirements-build.txt (dependências do app, do build e dos testes).
+# O .txt trava versões + hashes SHA-256, para o CustomTkinter, o PyInstaller e o resto não
+# mudarem sozinhos entre uma release e outra (o pyproject.toml continua com faixas amplas,
+# para quem instala pelo pip).
+#
+# Instalar (é o que os workflows e os scripts de build fazem):
+#   python -m pip install --require-hashes -r requirements-build.txt
+#   python -m pip install --no-deps -e .
+#
+# Atualizar de propósito: pip install uv, depois
+#   uv pip compile requirements-build.in --universal --python-version 3.10 --generate-hashes -o requirements-build.txt
+# e testar o app empacotado (layout claro/escuro, splash, arrastar e soltar) antes de publicar.
+customtkinter
+pillow
+certifi
+tkinterdnd2
+defusedxml
+pyinstaller
+pytest

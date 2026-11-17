@@ -6,7 +6,11 @@
 $ErrorActionPreference = 'Stop'
 Set-Location (Split-Path $PSScriptRoot -Parent)
 
-python -m pip install -q -e ".[build]"
+# dependências travadas (versões + hashes): o CustomTkinter/PyInstaller não mudam sozinhos
+python -m pip install -q --require-hashes -r requirements-build.txt
+if ($LASTEXITCODE -ne 0) { throw "pip (requirements-build.txt) falhou" }
+python -m pip install -q --no-deps -e .
+if ($LASTEXITCODE -ne 0) { throw "pip install -e . falhou" }
 $Version = (python -c "import secondtake; print(secondtake.__version__)").Trim()
 # canal (estável/beta): nome do app, prefixo dos arquivos, ícone e AppId do instalador
 $Ch = @{}
@@ -38,6 +42,7 @@ VSVersionInfo(
 python -m PyInstaller --windowed --noconfirm --clean `
   --name "$AppName" --paths src --collect-submodules secondtake `
   --collect-data customtkinter --collect-data secondtake --collect-all tkinterdnd2 `
+  --hidden-import PIL._tkinter_finder `
   --icon $Ico --version-file build\version_info.txt `
   scripts\secondtake_app.py
 

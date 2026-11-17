@@ -110,18 +110,28 @@ def _source_samples(mov: str):
 
 
 def make_xavc(path: str, seconds: float = 4.0, seed: int = 1, G: int = 12, gop: int = 24,
-              meta_size: int = 1024, pad: int = 1 << 20, bframes: int = 2) -> dict:
+              meta_size: int = 1024, pad: int = 1 << 20, bframes: int = 2, codec: str = 'h264',
+              data_start: int = HDR, tail_meta: int = 0) -> dict:
     """Cria um clipe sintético XAVC S 23,976p + LPCM 48 kHz estéreo.
+    codec='hevc' gera um XAVC HS de teste (libx265, Main 4:2:2 10, trilha hvc1 + hvcC); o layout
+    dos blocos é o mesmo do XAVC S, porque o da câmera ainda não foi medido num arquivo real.
+    data_start: onde começam os dados do mdat (262144 = FX3; 131072 = FX30, medido num clipe real).
+    tail_meta: tamanho de uma box `meta` de nível superior depois do moov (a FX30 grava ~445 KB).
     Retorna informações úteis aos testes (n_chunks, frames, offsets dos blocos)."""
+    gop_opts = f'keyint={gop}:min-keyint={gop}:scenecut=0:bframes={bframes}:b-adapt=0:open-gop=0'
+    if codec == 'hevc':
+        venc = ['-c:v', 'libx265', '-preset', 'ultrafast', '-pix_fmt', 'yuv422p10le', '-tag:v', 'hvc1',
+                '-x265-params', f'aud=1:{gop_opts}:log-level=error']
+    else:
+        venc = ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+                '-x264-params', f'aud=1:{gop_opts}']
     with tempfile.TemporaryDirectory() as td:
         mov = os.path.join(td, 'src.mov')
-        x264 = f'aud=1:keyint={gop}:min-keyint={gop}:scenecut=0:bframes={bframes}:b-adapt=0:open-gop=0'
         subprocess.run([
             'ffmpeg', '-v', 'error', '-y',
             '-f', 'lavfi', '-i', f'testsrc2=size=320x180:rate=24000/1001:duration={seconds}',
             '-f', 'lavfi', '-i', f'sine=frequency={220 + 110 * seed}:sample_rate=48000:duration={seconds}',
-            '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-x264-params', x264,
-            '-c:a', 'pcm_s16be', '-ac', '2', '-f', 'mov', mov], check=True)
+            *venc, '-c:a', 'pcm_s16be', '-ac', '2', '-f', 'mov', mov], check=True)
         src = _source_samples(mov)
     frames, keys, ctts = src['frames'], src['keys'], src['ctts']
     n_chunks = len(frames) // G
@@ -133,6 +143,7 @@ def make_xavc(path: str, seconds: float = 4.0, seed: int = 1, G: int = 12, gop: 
 
     ftyp = box(b'ftyp', b'XAVC' + struct.pack('>I', 0x01001f20) + b'XAVCmp42iso2')
     uuid = box(b'uuid', bytes(range(16)) + b'\x00' * 124)
+    HDR = data_start                    # noqa: N806 (mesmo nome do layout padrão)
     free_len = HDR - 16 - len(ftyp) - len(uuid)
     free = struct.pack('>I4s', free_len, b'free') + b'\0' * (free_len - 8)
     body = bytearray()
@@ -215,6 +226,8 @@ def make_xavc(path: str, seconds: float = 4.0, seed: int = 1, G: int = 12, gop: 
         out.write(body)
         out.write(b'\0' * pad)          # preenchimento antes do moov, como nas Sony
         out.write(moov)
+        if tail_meta:
+            out.write(struct.pack('>I4s', tail_meta, b'meta') + b'\x11' * (tail_meta - 8))
     return {'path': path, 'n_chunks': n_chunks, 'n_frames': n, 'G': G, 'gop': gop,
             'meta_offs': meta_offs, 'vid_offs': vid_offs, 'aud_offs': aud_offs,
-            'data_end': data_end, 'moov_pos': data_end + pad, 'a_chunk': a_chunk}
+            'data_end': data_end, 'moov_pos': data_end + pad, 'a_chunk': a_chunk, 'data_start': HDR}

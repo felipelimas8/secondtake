@@ -7,12 +7,14 @@ idioma (PT/EN) pode ser trocado na hora pelo seletor do cabeçalho.
 """
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import queue
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 import webbrowser
 from tkinter import filedialog, messagebox, ttk
@@ -52,6 +54,10 @@ PAL = {
     'info':     ('#1565C0', '#7DB4F5'),
     'danger':   ('#C62828', '#F28B82'),
 }
+# painel Detalhes: 320 px (antes 300) e coluna de valores com 20 px a mais (190), para um formato
+# XAVC como AVC200_3840_2160_H422P@L52 caber numa linha só
+DETAILS_W = 320
+DETAILS_VALUE_W = 190
 STATUS_ICON = {'ok': '✓', 'warn': '●', 'info': '●', 'danger': '▲', 'muted': '·'}
 
 
@@ -94,12 +100,7 @@ def free_space(path: str) -> float:
     return shutil.disk_usage(path).free
 
 
-def human(n):
-    for u in ('B', 'KB', 'MB', 'GB', 'TB'):
-        if n < 1024:
-            return f'{n:.1f} {u}' if u != 'B' else f'{n} B'
-        n /= 1024
-    return f'{n:.1f} PB'
+human = core.fmt_size          # mesma unidade na tabela, no Detalhes e nos avisos de espaço
 
 
 def _mode_idx():
@@ -124,6 +125,51 @@ def kind(c: core.Clip) -> str:
     return 'danger'
 
 
+class ScrollBox(ctk.CTkFrame):
+    """Área com rolagem vertical cuja barra só aparece quando o conteúdo não cabe.
+    (O CTkScrollableFrame mostra a barra sempre.) O conteúdo vai em `.inner`; a roda do
+    mouse é tratada pela App (`_on_wheel`), que encaminha para `wheel()`."""
+
+    def __init__(self, master, bg_key: str):
+        super().__init__(master, fg_color='transparent', corner_radius=0)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        self.canvas = tk.Canvas(self, highlightthickness=0, bd=0, height=1, bg=col(bg_key))
+        self.canvas.grid(row=0, column=0, sticky='nsew')
+        self.bar = ctk.CTkScrollbar(self, command=self.canvas.yview, width=12)
+        self.canvas.configure(yscrollcommand=self.bar.set)
+        self.inner = ctk.CTkFrame(self.canvas, fg_color=PAL[bg_key], corner_radius=0)
+        self._win = self.canvas.create_window(0, 0, window=self.inner, anchor='nw')
+        self.inner.bind('<Configure>', self._sync, add='+')
+        self.canvas.bind('<Configure>', self._sync, add='+')
+
+    def _sync(self, _=None):
+        w, have = self.canvas.winfo_width(), self.canvas.winfo_height()
+        self.canvas.itemconfigure(self._win, width=w)
+        need = self.inner.winfo_reqheight()
+        self.canvas.configure(scrollregion=(0, 0, w, need))
+        if need > have + 1:
+            if not self.bar.winfo_ismapped():
+                self.bar.grid(row=0, column=1, sticky='ns')
+        elif self.bar.winfo_ismapped():
+            self.bar.grid_remove()
+            self.canvas.yview_moveto(0)
+
+    def contains(self, widget) -> bool:
+        return widget is not None and str(widget).startswith(str(self))
+
+    def wheel(self, e):
+        if not self.bar.winfo_ismapped():
+            return
+        if getattr(e, 'num', None) in (4, 5):                  # X11
+            step = -1 if e.num == 4 else 1
+        elif sys.platform == 'darwin':
+            step = -e.delta
+        else:
+            step = -int(e.delta / 120) or (-1 if e.delta > 0 else 1)
+        self.canvas.yview_scroll(step, 'units')
+
+
 def secondary(**kw):
     """Estilo de botão secundário (contorno)."""
     d = dict(fg_color='transparent', border_width=1, border_color=PAL['border'], text_color=PAL['text'],
@@ -143,6 +189,35 @@ class App(ctk.CTk, _DnDBase):
         ctk.set_appearance_mode('system')
         ctk.set_default_color_theme('blue')
         super().__init__(fg_color=PAL['bg'])
+        # tela de apresentação enquanto a janela é montada (some assim que ela fica pronta)
+        self.withdraw()
+        splash = None
+        if not os.environ.get('SECONDTAKE_NO_SPLASH'):
+            try:
+                splash = Splash(self)
+            except Exception:
+                splash = None
+        try:
+            self._init_app()
+        except Exception:
+            if splash is not None:
+                splash.destroy()
+            raise
+        if splash is not None:
+            splash.finish(self._reveal)   # tempo mínimo de tela, depois mostra a janela e some com fade
+        else:
+            # Nunca revelar antes do mainloop: no Windows, o CTk.mainloop() esconde a janela para
+            # pintar a barra de título e, como houve um withdraw() antes, não a mostra de novo.
+            # Agendado, o _reveal roda já dentro do mainloop, como no caminho com splash.
+            self.after(0, self._reveal)
+
+    def _reveal(self):
+        self.update_idletasks()
+        self.deiconify()
+        self.lift()
+        self.focus_force()
+
+    def _init_app(self):
         self.dnd = False
         if TkinterDnD:
             try:
@@ -155,8 +230,17 @@ class App(ctk.CTk, _DnDBase):
         self.clips: list[core.Clip] = []
         self.q = queue.Queue()
         self.busy = False
+        self.repairing = False
+        self._thumb_cache: dict = {}       # (arquivo, mtime, tamanho) -> [PNG]
+        self._thumb_pending: set = set()
+        self._thumb_want = None            # chave da prévia que o painel está esperando
+        self._thumb_imgs: list = []        # referências às CTkImage (senão o Tk as descarta)
+        self.cancel_evt = threading.Event()
         self.src = tk.StringVar()
         self.dst = tk.StringVar(value=os.path.expanduser('~/Movies/SecondTake'))
+        self.dst_view = tk.StringVar()             # o que o rodapé mostra (pasta ou "pasta de cada clipe")
+        self.beside = tk.BooleanVar(value=bool(i18n.load_config().get('save_beside', False)))
+        self.dst.trace_add('write', lambda *_: self._sync_dst())
         self.only_bad = False
         self.do_verify = tk.BooleanVar(value=bool(core.ffmpeg_bin('ffprobe')))
         self.status_text = L('app.ready')
@@ -166,6 +250,8 @@ class App(ctk.CTk, _DnDBase):
         self._style_ttk()
         self._build()
         self._install_menu()
+        for ev in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            self.bind_all(ev, self._on_wheel, add='+')
         self.after(100, self._poll)
         self.after(2500, lambda: self.check_updates(manual=False))
         if sys.platform == 'win32':
@@ -206,7 +292,7 @@ class App(ctk.CTk, _DnDBase):
     # ------------------------------------------------------------ layout
     def _build(self):
         f = (FONT, 13)
-        self.title(f'{APP_NAME} {__version__}')
+        self.title(APP_NAME)           # a versão fica no subtítulo e no Sobre
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(4, weight=1)
 
@@ -304,10 +390,11 @@ class App(ctk.CTk, _DnDBase):
         self.tree.bind('<<TreeviewSelect>>', lambda e: (self._update_actions(), self._show_details()))
 
         # painel de detalhes (metadados do clipe selecionado)
-        self.details = ctk.CTkFrame(self.body, fg_color=PAL['card2'], corner_radius=8, width=300)
+        self.details = ctk.CTkFrame(self.body, fg_color=PAL['card2'], corner_radius=8, width=DETAILS_W)
         self.details.grid(row=0, column=2, sticky='nsew', padx=(6, 6), pady=6)
         self.details.grid_propagate(False)
         self.details.grid_columnconfigure(0, weight=1)
+        self.details.grid_rowconfigure(4, weight=1)        # a área de metadados ocupa o resto e rola
         self.tree.bind('<Double-1>', lambda e: self.advanced())
         self._tag_colors()
 
@@ -334,25 +421,32 @@ class App(ctk.CTk, _DnDBase):
         foot.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(foot, text=t('app.output'), font=(FONT, 12), text_color=PAL['muted']).grid(
             row=0, column=0, padx=(20, 8), pady=(12, 2), sticky='w')
-        self.dst_lbl = ctk.CTkLabel(foot, textvariable=self.dst, font=(MONO, 12), text_color=PAL['text'],
+        self.dst_lbl = ctk.CTkLabel(foot, textvariable=self.dst_view, font=(MONO, 12), text_color=PAL['text'],
                                     anchor='w', cursor='hand2')
         self.dst_lbl.grid(row=0, column=1, sticky='w', pady=(12, 2))
         self.dst_lbl.bind('<Button-1>', lambda e: self._pick_dst())
-        ctk.CTkButton(foot, text=t('app.change'), width=70, height=26, font=(FONT, 12), command=self._pick_dst,
-                      fg_color='transparent', text_color=PAL['accent'], hover_color=PAL['card2']).grid(
-            row=0, column=2, sticky='w', pady=(12, 2))
+        self.btn_change = ctk.CTkButton(foot, text=t('app.change'), width=70, height=26, font=(FONT, 12),
+                                        command=self._pick_dst, fg_color='transparent', text_color=PAL['accent'],
+                                        hover_color=PAL['card2'], text_color_disabled=PAL['muted'])
+        self.btn_change.grid(row=0, column=2, sticky='w', pady=(12, 2))
         ctk.CTkSwitch(foot, text=t('app.verify_switch'), variable=self.do_verify, font=(FONT, 12),
                       text_color=PAL['text']).grid(row=0, column=3, padx=12, pady=(12, 2))
+        # destino: logo abaixo da pasta de saída, que é o que ela muda
+        ctk.CTkSwitch(foot, text=t('app.beside_switch'), variable=self.beside, font=(FONT, 12),
+                      text_color=PAL['text'], command=self._toggle_beside).grid(
+            row=1, column=1, columnspan=3, sticky='w', pady=(2, 4))
+        self._sync_dst()
 
-        self.status = ctk.CTkLabel(foot, text=str(self.status_text), font=(FONT, 12), text_color=PAL['muted'],
+        self.status = ctk.CTkLabel(foot, text=str(self.status_text), font=(FONT, 12),
+                                   text_color=PAL['warn' if getattr(self, 'status_warn', False) else 'muted'],
                                    anchor='w')
-        self.status.grid(row=1, column=0, columnspan=4, sticky='ew', padx=20, pady=(0, 2))
+        self.status.grid(row=2, column=0, columnspan=4, sticky='ew', padx=20, pady=(0, 2))
         self.prog = ctk.CTkProgressBar(foot, height=6)
         self.prog.set(0)
-        self.prog.grid(row=2, column=0, columnspan=4, sticky='ew', padx=20, pady=(0, 14))
+        self.prog.grid(row=3, column=0, columnspan=4, sticky='ew', padx=20, pady=(0, 14))
 
         acts = ctk.CTkFrame(foot, fg_color='transparent')
-        acts.grid(row=0, column=4, rowspan=3, padx=(8, 20), pady=12, sticky='e')
+        acts.grid(row=0, column=4, rowspan=4, padx=(8, 20), pady=12, sticky='e')
         sec = secondary(height=36, font=f)
         self.btn_open = ctk.CTkButton(acts, text=t('app.open_out'), width=110, command=self._open_out, **sec)
         self.btn_open.pack(side='left', padx=4)
@@ -440,7 +534,13 @@ class App(ctk.CTk, _DnDBase):
         for k in ('warn', 'info', 'danger', 'muted'):
             self.tree.tag_configure(k, foreground=col('text'))
 
+    def _on_wheel(self, e):
+        box = getattr(self, '_dscroll', None)
+        if box is not None and box.winfo_exists() and box.contains(self.winfo_containing(e.x_root, e.y_root)):
+            box.wheel(e)
+
     def _show_details(self):
+        self._dscroll = None
         for w in self.details.winfo_children():
             w.destroy()
         sel = self._selected()
@@ -453,21 +553,89 @@ class App(ctk.CTk, _DnDBase):
         c = sel[0]
         ctk.CTkLabel(self.details, text=c.name, font=(MONO, 11), text_color=PAL['muted'], anchor='w').grid(
             row=1, column=0, sticky='ew', padx=14, pady=(0, 8))
+        self._show_preview(c)                    # no topo: o painel não rola em janelas baixas
         rows = core.meta_rows(c)
-        box = ctk.CTkFrame(self.details, fg_color='transparent')
-        box.grid(row=2, column=0, sticky='nsew', padx=14)
+        # metadados (+ Copiar) numa área que rola só quando não cabe; título e prévia ficam fixos
+        self._dscroll = ScrollBox(self.details, 'card2')
+        self._dscroll.grid(row=4, column=0, sticky='nsew', padx=(14, 4), pady=(0, 10))
+        box = self._dscroll.inner
         box.grid_columnconfigure(1, weight=1)
         for i, (k, v) in enumerate(rows):
             ctk.CTkLabel(box, text=k, font=(FONT, 11), text_color=PAL['muted'], anchor='nw', height=16).grid(
                 row=i, column=0, sticky='nw', padx=(0, 10), pady=3)
             ctk.CTkLabel(box, text=v, font=(FONT, 11), text_color=PAL['text'], anchor='nw', justify='left',
-                         wraplength=170, height=16).grid(row=i, column=1, sticky='nw', pady=3)
+                         wraplength=DETAILS_VALUE_W, height=16).grid(row=i, column=1, sticky='nw', pady=3)
 
         def copy():
             self.clipboard_clear()
             self.clipboard_append(c.name + '\n' + '\n'.join(f'{k}: {v}' for k, v in rows))
-        ctk.CTkButton(self.details, text=t('meta.copy'), width=80, height=26, font=(FONT, 11), command=copy,
-                      **secondary()).grid(row=3, column=0, sticky='w', padx=14, pady=(10, 12))
+        ctk.CTkButton(box, text=t('meta.copy'), width=80, height=26, font=(FONT, 11), command=copy,
+                      **secondary()).grid(row=len(rows), column=0, columnspan=2, sticky='w', pady=(10, 2))
+
+    # ------------------------------------------------------------ prévia (3 quadros)
+    def _show_preview(self, c):
+        ctk.CTkLabel(self.details, text=t('meta.preview'), font=(FONT, 11, 'bold'), text_color=PAL['muted'],
+                     anchor='w').grid(row=2, column=0, sticky='ew', padx=14, pady=(0, 4))
+        self.thumb_box = ctk.CTkFrame(self.details, fg_color='transparent')
+        self.thumb_box.grid(row=3, column=0, sticky='ew', padx=14, pady=(0, 10))
+        self._thumb_want = None
+        src = core.thumbnail_source(c)
+        if not core.ffmpeg_bin():
+            return self._thumb_note(t('meta.preview_noff'))
+        if not src:
+            return self._thumb_note(t('meta.preview_after'))
+        try:
+            st = os.stat(src)
+        except OSError:
+            return self._thumb_note(t('meta.preview_fail'))
+        key = (src, st.st_mtime_ns, st.st_size)
+        self._thumb_want = key
+        self._thumb_log = 'log3' in str((c.extra.get('meta') or {}).get('xml_gamma', '')).lower().replace('-', '')
+        if key in self._thumb_cache:
+            return self._render_thumbs(self._thumb_cache[key])
+        self._thumb_note(t('meta.preview_loading'))
+        if key in self._thumb_pending:
+            return
+        self._thumb_pending.add(key)
+
+        def work():
+            try:
+                pngs = core.thumbnails(src)
+            except Exception:
+                pngs = []
+            self.q.put(('thumbs', key, pngs))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _thumb_note(self, text):
+        for w in self.thumb_box.winfo_children():
+            w.destroy()
+        ctk.CTkLabel(self.thumb_box, text=text, font=(FONT, 11), text_color=PAL['muted'], anchor='w',
+                     justify='left', wraplength=260).pack(anchor='w')
+
+    def _render_thumbs(self, pngs):
+        import io
+        from PIL import Image
+        if not pngs or not any(pngs):
+            return self._thumb_note(t('meta.preview_fail'))
+        for w in self.thumb_box.winfo_children():
+            w.destroy()
+        row = ctk.CTkFrame(self.thumb_box, fg_color='transparent')
+        row.pack(anchor='w')
+        self._thumb_imgs = []
+        w_px = 84
+        for i, data in enumerate(pngs):
+            if not data:
+                im = Image.new('RGB', (16, 9), (40, 40, 40))
+            else:
+                im = Image.open(io.BytesIO(data))
+                im.load()
+            h_px = max(1, round(w_px * im.height / im.width))
+            img = ctk.CTkImage(light_image=im, dark_image=im, size=(w_px, h_px))
+            self._thumb_imgs.append(img)
+            ctk.CTkLabel(row, image=img, text='').pack(side='left', padx=(0 if i == 0 else 4, 0))
+        if getattr(self, '_thumb_log', False):
+            ctk.CTkLabel(self.thumb_box, text=t('meta.preview_log'), font=(FONT, 10), text_color=PAL['muted'],
+                         anchor='w').pack(anchor='w', pady=(4, 0))
 
     def _on_view(self, value):
         self.only_bad = value == t('app.view_bad')
@@ -475,13 +643,17 @@ class App(ctk.CTk, _DnDBase):
 
     def _show_empty(self, show: bool):
         if show:
-            self.empty.place(relx=0.5, rely=0.45, anchor='center')
+            # centraliza na área da tabela (não no corpo inteiro, que inclui o painel Detalhes);
+            # y=12 compensa metade do cabeçalho das colunas
+            self.empty.place(in_=self.tree, relx=0.5, rely=0.5, y=12, anchor='center')
         else:
             self.empty.place_forget()
 
-    def _set_status(self, text):
+    def _set_status(self, text, warn: bool = False):
+        """Barra de status. warn=True: aviso discreto (texto em laranja, sem janela)."""
         self.status_text = text
-        self.status.configure(text=str(text))
+        self.status_warn = warn
+        self.status.configure(text=str(text), text_color=PAL['warn' if warn else 'muted'])
 
     def _set_subtitle(self, text):
         self.subtitle_text = text
@@ -579,13 +751,40 @@ class App(ctk.CTk, _DnDBase):
         AboutDialog(self)
 
     # ------------------------------------------------------------ helpers
+    def _sync_dst(self):
+        """Rodapé: mostra a pasta de saída ou, com "Salvar junto dos originais", o destino por clipe."""
+        beside = self.beside.get()
+        self.dst_view.set(t('app.out_beside') if beside else self.dst.get())
+        if hasattr(self, 'btn_change'):
+            self.btn_change.configure(state='disabled' if beside else 'normal')
+            self.dst_lbl.configure(cursor='arrow' if beside else 'hand2')
+
+    def _toggle_beside(self):
+        i18n.save_config(save_beside=bool(self.beside.get()))
+        self._sync_dst()
+
     def _pick_dst(self):
+        if self.beside.get():
+            return
         d = filedialog.askdirectory(title=t('app.pick_out'), initialdir=self.dst.get())
         if d:
             self.dst.set(d)
 
     def _open_out(self):
+        if self.beside.get():
+            # a subpasta Second Take do último clipe reparado, ou da pasta analisada
+            done = [c for c in self.clips if c.output]
+            cands = [os.path.dirname(done[-1].output)] if done else []
+            if self.src.get():
+                cands += [os.path.join(self.src.get(), core.SAME_FOLDER_DIR), self.src.get()]
+            d = next((x for x in cands if os.path.isdir(x)), None)
+            if d:
+                open_folder(d)
+            return
         d = self.dst.get()
+        sub = os.path.join(d, core.SAME_FOLDER_DIR)
+        if self.src.get() and core.same_dir(d, self.src.get()) and os.path.isdir(sub):
+            d = sub                              # saída = origem: os recuperados estão na subpasta
         os.makedirs(d, exist_ok=True)
         open_folder(d)
 
@@ -593,18 +792,26 @@ class App(ctk.CTk, _DnDBase):
         return [self.clips[int(i)] for i in self.tree.selection()]
 
     def _todo(self):
-        return [c for c in self._selected() if c.status in core.REPAIRABLE and c.reference]
+        # inclui a extração bruta sem referência quando o usuário seleciona a linha
+        return [c for c in self._selected() if core.repairable(c)]
 
     @staticmethod
     def _auto(c):
         """Selecionado automaticamente: reparo de cabeçalho ou reconstrução (não a extração bruta)."""
-        return c.status in core.REPAIRABLE and c.reference and c.extra.get('mode') != 'extrair'
+        return core.auto_selected(c)
 
     def _update_actions(self):
         n = len(self._todo()) if self.clips else 0
         busy = self.busy
         label = t('app.repair_n' if n == 1 else 'app.repair_n_pl', n=n) if n else t('app.repair')
-        self.btn_fix.configure(text=label, state='normal' if n and not busy else 'disabled')
+        if self.repairing:
+            # durante o reparo, a ação principal vira Cancelar (continua sendo o único botão azul)
+            stopping = self.cancel_evt.is_set()
+            self.btn_fix.configure(text=t('app.cancel'), command=self.cancel,
+                                   state='disabled' if stopping else 'normal')
+        else:
+            self.btn_fix.configure(text=label, command=self.repair,
+                                   state='normal' if n and not busy else 'disabled')
         self.btn_adv.configure(state='normal' if len(self._selected()) == 1 and not busy else 'disabled')
         self.btn_report.configure(state='normal' if self.clips and not busy else 'disabled')
         for b in (self.btn_scan, self.btn_files):
@@ -623,11 +830,7 @@ class App(ctk.CTk, _DnDBase):
             audio = t('app.audio_silent')
         else:
             audio = f'{c.audio_db:.0f} dB'
-        verify, detail = str(c.verify or ''), str(c.detail or '')
-        if verify and detail and not verify.startswith(('ERRO', 'ERROR')):
-            diag = f'{verify} · {detail}'
-        else:
-            diag = verify or detail or '—'
+        diag = core.diag_text(c)
         return (f'{STATUS_ICON[kind(c)]}  ' + t(f'status.{c.status}'), action, audio,
                 human(c.size), os.path.basename(c.reference) or '—', diag)
 
@@ -710,49 +913,98 @@ class App(ctk.CTk, _DnDBase):
         todo = self._todo()
         if not todo:
             return
+        beside = self.beside.get()
         out = self.dst.get()
-        if self.src.get() and os.path.abspath(out).startswith(os.path.abspath(self.src.get()) + os.sep):
-            if not messagebox.askyesno(APP_NAME, t('app.out_inside')):
-                return
         total = sum(c.size for c in todo)
-        try:
-            os.makedirs(out, exist_ok=True)
-            free = free_space(out)
-        except OSError as e:
-            messagebox.showerror(APP_NAME, t('app.cant_write', path=out, err=e))
+        if beside:
+            # cada clipe vai para <pasta dele>/Second Take: confere o espaço de cada disco
+            per_disk: dict = {}
+            try:
+                for d, group in core.group_by_folder(todo).items():
+                    dev = os.stat(d).st_dev
+                    need_d, _ = per_disk.get(dev, (0, d))
+                    per_disk[dev] = (need_d + core.space_needed(group), d)
+                short = [(need_d, free_space(d)) for need_d, d in per_disk.values() if free_space(d) < need_d]
+            except OSError as e:
+                messagebox.showerror(APP_NAME, t('app.cant_write', path=t('app.out_beside'), err=e))
+                return
+            if short:
+                need_d, free = short[0]
+                messagebox.showerror(APP_NAME, t('app.no_space', need=human(need_d), free=human(free)))
+                return
+            where = t('app.out_beside')
+        else:
+            src_dirs = {os.path.dirname(os.path.abspath(c.path)) for c in todo}
+            if self.src.get():
+                src_dirs.add(self.src.get())
+            # saída = origem vai sozinha para a subpasta Second Take; subpasta da origem: perguntar
+            if core.out_inside_source(out, src_dirs):
+                if not messagebox.askyesno(APP_NAME, t('app.out_inside')):
+                    return
+            need = core.space_needed(todo)          # extração bruta ocupa ~3x; os demais modos ~1x
+            try:
+                os.makedirs(out, exist_ok=True)
+                free = free_space(out)
+            except OSError as e:
+                messagebox.showerror(APP_NAME, t('app.cant_write', path=out, err=e))
+                return
+            if free < need:
+                messagebox.showerror(APP_NAME, t('app.no_space', need=human(need), free=human(free)))
+                return
+            where = out
+        keep = keep_names_enabled()             # "manter o nome original" (Ajustes); na pasta dos
+        # originais a saída vai para a subpasta Second Take, então o mesmo nome é seguro
+        if not messagebox.askyesno(APP_NAME, t('app.confirm', n=len(todo), size=human(total), path=where)):
             return
-        if free < total * 1.05:
-            messagebox.showerror(APP_NAME, t('app.no_space', need=human(total), free=human(free)))
-            return
-        keep = keep_names_enabled()
-        if keep and any(core.same_folder(c.path, out) for c in todo):
-            messagebox.showerror(APP_NAME, t('app.keep_same_folder'))
-            return
-        if not messagebox.askyesno(APP_NAME, t('app.confirm', n=len(todo), size=human(total), path=out)):
-            return
+        self.cancel_evt.clear()
+        self.repairing = True
         self._set_busy(True)
         verify = self.do_verify.get()
         report = t('csv.report_name')
+        cancel = self.cancel_evt
 
         def work():
             done = 0
+            n_done = 0
             for c in todo:
+                if cancel.is_set():
+                    break
+
+                def progress(b, n, base=done):
+                    if cancel.is_set():
+                        raise core.Cancelled()      # sai do meio da escrita; o .part é apagado
+                    self.q.put(('fix', base + b, total))
+
                 try:
                     self.q.put(('fix_start', c.name))
-                    core.repair(c, out, lambda b, n, base=done: self.q.put(('fix', base + b, total)), keep_names=keep)
+                    dest = os.path.dirname(os.path.abspath(c.path)) if beside else out
+                    core.repair(c, dest, progress, keep_names=keep)
+                    n_done += 1
                     if verify:
                         self.q.put(('verify', c.name))
-                        core.verify(c)
+                        core.verify(c, cancel=cancel)
+                except core.Cancelled:
+                    c.verify = L('verify.cancelled') if not c.output else c.verify
                 except Exception as e:
                     c.verify = L('verify.error', err=msg(e))
                 done += c.size
                 self.q.put(('fix_one', c))
-            try:
-                core.write_report(self.clips, os.path.join(out, report))
-            except Exception:
-                pass
-            self.q.put(('fix_done', len(todo), out, report))
+            shown, failures = core.write_batch_reports(self.clips, todo, None if beside else out, report)
+            if shown is None:
+                shown = t('app.out_beside')
+            stopped = cancel.is_set()
+            self.q.put(('fix_done', n_done if stopped else len(todo), shown, report, len(todo) if stopped else None,
+                        failures))
         threading.Thread(target=work, daemon=True).start()
+
+    def cancel(self):
+        """Pede o fim do lote: o clipe em andamento é interrompido e descartado; os já
+        reparados ficam, e o relatório é gravado com o que foi feito."""
+        if not self.repairing or self.cancel_evt.is_set():
+            return
+        self.cancel_evt.set()
+        self._set_status(L('app.cancelling'))
+        self._update_actions()
 
     def advanced(self):
         sel = self._selected()
@@ -767,7 +1019,12 @@ class App(ctk.CTk, _DnDBase):
     def export(self):
         p = filedialog.asksaveasfilename(defaultextension='.csv', initialfile=t('csv.diag_name'))
         if p:
-            core.write_report(self.clips, p)
+            try:
+                core.write_report(self.clips, p)
+            except Exception as e:
+                logging.getLogger('secondtake').exception('relatório CSV não exportado: %s', p)
+                self._set_status(L('app.export_failed', err=core.short_err(e)), warn=True)
+                return
             self._set_status(L('app.saved', path=p))
 
     # ------------------------------------------------------------ fila
@@ -775,6 +1032,7 @@ class App(ctk.CTk, _DnDBase):
         if ctk.get_appearance_mode() != self._mode:
             self._style_ttk()
             self._tag_colors()
+            self._show_details()          # o Canvas da área de rolagem não segue o tema sozinho
         try:
             while True:
                 m = self.q.get_nowait()
@@ -810,15 +1068,34 @@ class App(ctk.CTk, _DnDBase):
                     i = str(self.clips.index(c))
                     if self.tree.exists(i):
                         self.tree.item(i, values=self._row(c), tags=(kind(c),))
+                    if self._selected() == [c]:
+                        self._show_details()          # prévia do arquivo recuperado logo após o reparo
                 elif k == 'fix_done':
-                    self._set_status(L('app.done_fix', n=m[1], report=m[3], path=m[2]))
+                    if m[5]:
+                        _, err = m[5][0]          # caminho e traceback ficam no log
+                        self._set_status(L('app.report_failed', n=m[1], err=core.short_err(err)), warn=True)
+                    elif m[4] is not None:
+                        self._set_status(L('app.cancelled', n=m[1], total=m[4], report=m[3], path=m[2]))
+                    else:
+                        self._set_status(L('app.done_fix', n=m[1], report=m[3], path=m[2]))
                     self.prog.set(1)
+                    self.repairing = False
+                    self.cancel_evt.clear()
                     self._set_busy(False)
+                elif k == 'thumbs':
+                    _, key, pngs = m
+                    self._thumb_pending.discard(key)
+                    self._thumb_cache[key] = pngs
+                    if len(self._thumb_cache) > 200:
+                        self._thumb_cache.pop(next(iter(self._thumb_cache)))
+                    if key == self._thumb_want and getattr(self, 'thumb_box', None) is not None \
+                            and self.thumb_box.winfo_exists():
+                        self._render_thumbs(pngs)
                 elif k == 'update':
                     _, info, manual, err = m
                     if manual:
-                        self._set_status(self.status_text if not isinstance(self.status_text, L)
-                                         or self.status_text.key != 'upd.checking' else L('app.ready'))
+                        if isinstance(self.status_text, L) and self.status_text.key == 'upd.checking':
+                            self._set_status(L('app.ready'))
                         if err is not None:
                             messagebox.showwarning(APP_NAME, t('upd.failed', err=err))
                         elif info is None:
@@ -835,6 +1112,84 @@ class App(ctk.CTk, _DnDBase):
         except queue.Empty:
             pass
         self.after(100, self._poll)
+
+
+# ======================================================================= apresentação
+
+class Splash(tk.Toplevel):
+    """Tela de apresentação sem barra de título, centralizada na tela, nas cores do tema do sistema.
+    Mostra o ícone, o nome, a linha do app com a versão e a autoria."""
+
+    W, H = 440, 300
+    MIN_SECONDS = 1.2      # tempo mínimo na tela, contado desde que aparece (não soma ao carregamento)
+    FADE_MS = 250
+
+    def __init__(self, app):
+        self._t0 = time.monotonic()
+        self._job = None
+        self._closing = False
+        self._on_close = None
+        dark = ctk.get_appearance_mode() == 'Dark'
+        col = {k: v[1 if dark else 0] for k, v in PAL.items()}
+        super().__init__(app, bg=col['border'])
+        self.overrideredirect(True)
+        try:
+            self.attributes('-topmost', True)
+        except tk.TclError:
+            pass
+        x = (self.winfo_screenwidth() - self.W) // 2
+        y = (self.winfo_screenheight() - self.H) // 2 - 40
+        self.geometry(f'{self.W}x{self.H}+{max(x, 0)}+{max(y, 0)}')
+        card = tk.Frame(self, bg=col['card'])
+        card.place(x=1, y=1, width=self.W - 2, height=self.H - 2)   # 1 px de borda
+        box = ctk.CTkFrame(card, fg_color=col['card'], bg_color=col['card'], corner_radius=0)
+        box.place(relx=0.5, rely=0.46, anchor='center')
+        icon = app_icon(96)
+        if icon:
+            ctk.CTkLabel(box, text='', image=icon, fg_color=col['card']).pack(pady=(0, 10))
+        ctk.CTkLabel(box, text=APP_NAME, font=(FONT, 24, 'bold'), text_color=col['text'],
+                     fg_color=col['card']).pack()
+        ctk.CTkLabel(box, text=t('app.tagline', v=__version__), font=(FONT, 13), text_color=col['muted'],
+                     fg_color=col['card']).pack(pady=(2, 0))
+        ctk.CTkLabel(card, text=t('about.by'), font=(FONT, 11), text_color=col['muted'],
+                     fg_color=col['card']).place(relx=0.5, rely=1.0, y=-22, anchor='center')
+        self.bind('<Button-1>', lambda e: self._close())   # um clique pula
+        self.lift()
+        self.update()
+
+    def finish(self, on_close):
+        """Chamado quando a janela principal está pronta: espera o que faltar do tempo mínimo."""
+        self._on_close = on_close
+        wait = max(0.0, self.MIN_SECONDS - (time.monotonic() - self._t0))
+        self._job = self.after(int(wait * 1000), self._close)
+
+    def _close(self):
+        if self._closing or self._on_close is None:
+            return
+        self._closing = True
+        if self._job:
+            self.after_cancel(self._job)
+        self._on_close()           # mostra a janela principal por baixo
+        try:
+            self.lift()
+        except tk.TclError:
+            return
+        self._fade(1.0)
+
+    def _fade(self, alpha):
+        steps = 10
+        alpha -= 1.0 / steps
+        try:
+            if alpha <= 0:
+                self.destroy()
+                return
+            self.attributes('-alpha', alpha)
+            self.after(self.FADE_MS // steps, self._fade, alpha)
+        except tk.TclError:        # janela já fechada ou sem suporte a transparência
+            try:
+                self.destroy()
+            except tk.TclError:
+                pass
 
 
 # ======================================================================= diálogos
@@ -1122,6 +1477,58 @@ def _log_dir() -> str:
     return os.path.expanduser('~/.local/state/' + FILE_PREFIX.lower())
 
 
+def _smoke() -> int:
+    """Teste de fumaça do app empacotado (CI, `SECONDTAKE_SMOKE=1`): monta a janela principal
+    sem splash e sem rede, deixa o loop do Tk rodar 1,5 s, confere o essencial e fecha.
+
+    Pega o que os testes do pytest não pegam: dado do CustomTkinter/tkdnd que o PyInstaller
+    não levou, import que só falha congelado, exceção em callback do Tk na abertura.
+    O resultado sai em JSON numa linha, em `SECONDTAKE_SMOKE_OUT` (arquivo) ou no stdout
+    (o .exe "windowed" do Windows não tem stdout). Código de saída 0 = abriu."""
+    import json
+    import traceback
+    os.environ['SECONDTAKE_NO_SPLASH'] = '1'
+    errors: list[str] = []
+    info = {'version': __version__, 'frozen': bool(getattr(sys, 'frozen', False)),
+            'platform': platform.platform(), 'python': platform.python_version()}
+    try:
+        App.check_updates = lambda self, manual: None                    # sem rede no CI
+        App.report_callback_exception = lambda self, *exc: errors.append(
+            ''.join(traceback.format_exception(*exc)))
+        app = App()
+        app.after(1500, app.quit)
+        app.mainloop()
+        app.update_idletasks()
+        info.update(tk=str(app.tk.call('info', 'patchlevel')), customtkinter=ctk.__version__,
+                    dnd=bool(app.dnd), lang=i18n.get_lang(), title=app.title(),
+                    state=app.state(), mapped=bool(app.winfo_ismapped()), icon=app_icon(32) is not None,
+                    rows=len(app.tree.get_children()) if hasattr(app, 'tree') else None)
+        app.destroy()
+        if TkinterDnD is not None and not info['dnd']:
+            errors.append('tkdnd não carregou (arrastar e soltar)')
+        # a janela saiu do withdraw (sem splash, _reveal chama deiconify). Não usar winfo_ismapped:
+        # no runner Windows do GitHub (serviço, sem área de trabalho visível) ele é sempre False
+        if info['state'] not in ('normal', 'zoomed'):
+            errors.append(f"a janela principal não foi exibida (state={info['state']})")
+        if not info['icon']:
+            errors.append('ícone do app não encontrado no pacote')
+    except BaseException:
+        errors.append(traceback.format_exc())
+    info['errors'] = errors
+    info['ok'] = not errors
+    text = json.dumps(info, ensure_ascii=False)
+    out = os.environ.get('SECONDTAKE_SMOKE_OUT')
+    try:
+        if out:
+            with open(out, 'w', encoding='utf-8') as f:
+                f.write(text + '\n')
+        elif sys.stdout is not None:
+            print(text, flush=True)
+    except OSError:
+        pass
+    return 0 if info['ok'] else 1
+
+
 def main():
     """Abre o app. Se algo falhar na abertura, grava o erro em um log e tenta mostrá-lo numa janela,
     em vez de o app só piscar no Dock e fechar."""
@@ -1135,8 +1542,15 @@ def main():
         fh.write(f'\n--- {APP_NAME} {__version__} · {platform.platform()} · Python {platform.python_version()}\n')
         fh.flush()
         faulthandler.enable(fh)          # registra até falhas fatais (segfault) do Tk
+        h = logging.StreamHandler(fh)    # logging.exception (relatório não gravado etc.) no mesmo arquivo
+        h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
+        lg = logging.getLogger('secondtake')
+        lg.addHandler(h)
+        lg.setLevel(logging.INFO)
     except Exception:
         pass
+    if os.environ.get('SECONDTAKE_SMOKE'):
+        sys.exit(_smoke())
     try:
         App().mainloop()
     except Exception:

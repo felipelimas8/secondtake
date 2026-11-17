@@ -13,10 +13,10 @@ Obrigado por ajudar! Algumas regras para manter o projeto útil e seguro.
 
 ## Código
 
-- Python 3.10+, sem dependências obrigatórias além da biblioteca padrão.
-- Toda correção ou formato novo vem acompanhado de teste em `tests/`. Use o `tests/synth.py` para gerar clipes sintéticos com o dano que você quer cobrir.
+- Python 3.10+. Ambiente de desenvolvimento igual ao do build: `pip install --require-hashes -r requirements-build.txt` e `pip install --no-deps -e .` (veja o README). Não troque versão de dependência sem regenerar o lockfile e testar o app empacotado.
+- Toda correção ou formato novo vem acompanhado de teste em `tests/`. Use o `tests/synth.py` para gerar clipes sintéticos com o dano que você quer cobrir (`codec='hevc'` para XAVC HS).
 - Rode `python3 -m pytest` antes de abrir o PR.
-- Mensagens da interface em português. Se for traduzir, mantenha as chaves num lugar só.
+- Todo texto de interface, diagnóstico, CSV e linha de comando entra em português e inglês no `src/secondtake/i18n.py`. O `test_i18n` acusa chave faltando.
 
 ## Licença
 
