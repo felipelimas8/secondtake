@@ -31,8 +31,10 @@ from .safeio import atomic_write, copy_times, unique_stem
 
 log = logging.getLogger('secondtake')
 
-HDR = 262144                 # ftyp + uuid + free + cabeçalho mdat (layout XAVC S)
-MDAT_POS = HDR - 16          # 262128
+HDR = 262144                 # cabeçalho da FX3 (ftyp + uuid + free + mdat): dados em 0x40000.
+                             # A FX30 começa os dados em 131072 (0x20000). O app não depende
+                             # disso: lê a estrutura (parse_layout) e o 1º offset do moov.
+LAYOUT_MAX = 64 << 20        # o mdat tem de começar antes disto (cabeçalho Sony: 128 a 256 KiB)
 TAIL_SCAN = 16_000_000       # bytes lidos do fim procurando o moov
 VIDEO_EXT = ('.mp4', '.mov', '.rsv')   # .RSV: arquivo temporário da Sony (gravação interrompida)
 
@@ -212,6 +214,48 @@ def _find_moov_in(f, size: int, window: int) -> tuple[int, bytes] | None:
         msize = struct.unpack('>I', tail[i - 4:i])[0]
         if 8 < msize <= len(tail) - (i - 4) and b'trak' in tail[i:i - 4 + msize]:
             return base + i - 4, tail[i - 4:i - 4 + msize]
+
+
+def parse_layout(path: str) -> dict | None:
+    """Estrutura do início do arquivo: `ftyp` na posição 0 e boxes encadeadas, com tamanhos
+    válidos, até o `mdat`. Retorna {'mdat_pos', 'mdat_hdr' (8 ou 16), 'data_start', 'mdat_end'}
+    ou None se o cabeçalho não fecha. Não supõe posição fixa: vale para FX3 (dados em 262144),
+    FX30 (131072) e qualquer layout íntegro."""
+    try:
+        size = os.path.getsize(path)
+        with open(path, 'rb') as f:
+            p = 0
+            for _ in range(64):
+                f.seek(p)
+                h = f.read(16)
+                if len(h) < 8:
+                    return None
+                sz, typ = struct.unpack('>I4s', h[:8])
+                hl = 8
+                if sz == 1:
+                    if len(h) < 16:
+                        return None
+                    sz, hl = struct.unpack('>Q', h[8:16])[0], 16
+                elif sz == 0:
+                    sz = size - p
+                if (p == 0 and typ != b'ftyp') or not all(32 <= b < 127 for b in typ) \
+                        or sz < hl or p + sz > size:
+                    return None
+                if typ == b'mdat':
+                    return {'mdat_pos': p, 'mdat_hdr': hl, 'data_start': p + hl, 'mdat_end': p + sz}
+                p += sz
+                if p > LAYOUT_MAX:
+                    return None
+    except OSError:
+        return None
+    return None
+
+
+def first_offset(tracks: list['Track']) -> int | None:
+    """Início dos dados segundo o índice: o menor offset de amostra entre as trilhas.
+    Funciona com o cabeçalho destruído, porque vem do moov."""
+    offs = [o for t in tracks for o in t.offsets]
+    return min(offs) if offs else None
 
 
 def find_moov(path: str) -> tuple[int, bytes] | None:
@@ -586,8 +630,15 @@ def diagnose(path: str) -> Clip:
         _sniff(c)
         return c
     c.audio_db = _audio_peak_db(path, tracks)
-    good_head = head[4:8] == b'ftyp' and head[MDAT_POS + 4:MDAT_POS + 8] == b'mdat'
+    start = first_offset(tracks)
+    if start is not None:
+        c.extra['data_start'] = start
+    lay = parse_layout(path)
+    # cabeçalho íntegro = estrutura fecha até o mdat, e o índice aponta para dentro dele
+    good_head = lay is not None and start is not None and lay['data_start'] <= start \
+        and all(o < lay['mdat_end'] for t in tracks for o in t.offsets)
     if good_head:
+        c.extra['layout'] = lay
         c.status, c.detail = OK, ''
     elif c.status != EMPTY:
         c.status = HEADER
@@ -636,12 +687,17 @@ def scan(folder: str, progress=None) -> list[Clip]:
 
 
 def _is_reference(c: Clip) -> bool:
+    """Clipe íntegro que serve de molde: estrutura válida e dados começando logo após o mdat,
+    como a Sony grava (o layout exato vem de parse_layout, não de uma posição fixa)."""
     if c.status != OK:
         return False
-    with open(c.path, 'rb') as f:
-        h = f.read(HDR)
-    return h[4:8] == b'ftyp' and h[MDAT_POS + 4:MDAT_POS + 8] == b'mdat' \
-        and struct.unpack('>I', h[MDAT_POS:MDAT_POS + 4])[0] == 1
+    lay = c.extra.get('layout') or parse_layout(c.path)
+    return lay is not None and c.extra.get('data_start', lay['data_start']) == lay['data_start']
+
+
+def ref_data_start(r: Clip) -> int | None:
+    lay = r.extra.get('layout') or parse_layout(r.path)
+    return lay['data_start'] if lay else None
 
 
 def _fps_key(v) -> str:
@@ -734,9 +790,15 @@ def _assign_references(clips: list[Clip], progress=None, extra_refs: list[Clip] 
     for i, c in enumerate(todo):
         pool = _ref_candidates(c, refs)
         if c.status == HEADER:
-            if pool:
-                c.reference = pool[0].path
+            # só serve referência com o mesmo início de dados (FX3 256 KiB × FX30 128 KiB):
+            # o cabeçalho copiado tem de terminar exatamente onde os dados do clipe começam
+            start = c.extra.get('data_start')
+            same = [r for r in pool if ref_data_start(r) == start]
+            if same:
+                c.reference = same[0].path
                 c.extra['mode'] = 'cabecalho'
+            elif pool:
+                c.note(L('diag.no_ref_layout', start=start))
             else:
                 c.note(L('diag.no_ref'))
             continue
@@ -757,14 +819,14 @@ def _quick_ref(path: str) -> Clip | None:
     """Checagem leve de um possível clipe de referência (cabeçalho + moov)."""
     try:
         size = os.path.getsize(path)
-        with open(path, 'rb') as f:
-            h = f.read(HDR)
-        if h[4:8] != b'ftyp' or h[MDAT_POS + 4:MDAT_POS + 8] != b'mdat':
+        lay = parse_layout(path)
+        if lay is None:
             return None
         m = find_moov(path)
-        if m is None:
+        if m is None or m[0] < lay['data_start']:
             return None
         c = Clip(path, size, OK)
+        c.extra['layout'] = lay
         xml = sony_xml(path)
         c.camera, c.codec, c.fps = xml.get('camera', ''), xml.get('codec', ''), xml.get('fps', '')
         c.extra['meta'] = read_meta(path, m[1])
@@ -853,9 +915,24 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
         copy_times(st, dst)
         c.output = dst
         return dst
+    start = c.extra.get('data_start')
+    if start is None:
+        m = find_moov(c.path)
+        start = first_offset(parse_moov(m[1])) if m else None
+    lay = parse_layout(c.reference)
+    if start is None or lay is None or lay['data_start'] != start:
+        # nunca colar o cabeçalho de um layout diferente: apagaria o começo dos dados
+        raise ValueError(L('err.ref_layout_mismatch', ref=os.path.basename(c.reference),
+                           a=lay['data_start'] if lay else '?', b=start if start is not None else '?'))
     with open(c.reference, 'rb') as f:
-        hdr = bytearray(f.read(HDR))
-    hdr[HDR - 8:HDR] = struct.pack('>Q', c.moov_pos - MDAT_POS)
+        hdr = bytearray(f.read(start))
+    mdat_size = c.moov_pos - lay['mdat_pos']           # o mdat da Sony vai até o moov
+    if lay['mdat_hdr'] == 16:
+        hdr[start - 8:start] = struct.pack('>Q', mdat_size)
+    elif mdat_size <= 0xFFFFFFFF:
+        hdr[start - 8:start - 4] = struct.pack('>I', mdat_size)
+    else:
+        raise ValueError(L('err.ref_layout_mismatch', ref=os.path.basename(c.reference), a=start, b=start))
     oext = out_ext(c.name)
     xml_src = os.path.splitext(c.path)[0] + 'M01.XML'
     has_xml = os.path.exists(xml_src)
@@ -863,7 +940,7 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
     dst = base + oext
     copied = 0
     with open(c.path, 'rb') as src, atomic_write(dst) as out:
-        src.seek(HDR)
+        src.seek(start)
         out.write(hdr)
         while True:
             b = src.read(16 * 1024 * 1024)

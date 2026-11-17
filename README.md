@@ -106,7 +106,7 @@ secondtake repair /Volumes/CARTAO/PRIVATE/M4ROOT/CLIP --beside
 
 ## Limitações conhecidas
 
-- **Câmeras validadas:** só a Sony FX3, em XAVC S-I 4K 4:2:2 10-bit (23,98p e 59,94p), com material real. Outras câmeras XAVC S devem funcionar, mas ainda não foram validadas. Relate o resultado numa *issue*.
+- **Câmeras validadas:** a Sony FX3, em XAVC S-I 4K 4:2:2 10-bit (23,98p e 59,94p), com material real. Da FX30 já foi medido o layout do arquivo (dados em 131072, contra 262144 na FX3), e o app trata os dois; a recuperação com dano real ainda não foi validada. Outras câmeras XAVC S devem funcionar, mas ainda não foram validadas. Relate o resultado numa *issue*.
 - **XAVC HS (H.265 / HEVC), suporte parcial:** o app reconhece o codec (`hvc1`/`hev1`, também pelo conteúdo quando o índice sumiu), mostra perfil, nível, 4:2:2 e 10-bit no Detalhes, gera a prévia e faz a **troca de cabeçalho** (nível 1). A reconstrução do índice e a extração bruta ainda não: dependem do layout dos blocos XAVC HS, que vai ser medido num clipe real da câmera. Até lá, esses clipes aparecem com o diagnóstico "XAVC HS (H.265) sem índice: reconstrução ainda não suportada" e ficam fora do lote.
 - Outras marcas (Canon, Panasonic, DJI, GoPro, iPhone) ainda não são suportadas.
 - **Referência obrigatória:** a reconstrução precisa de pelo menos um clipe íntegro da mesma câmera, com a mesma resolução, fps e codec.
@@ -133,6 +133,7 @@ A suíte **não usa material de câmera**. O `tests/synth.py` gera clipes sinté
 | `test_hardening.py` | `find_moov`, cache de perfis, CSV contra fórmulas, `config.json`, XML com `defusedxml`, arquivos malformados |
 | `test_pro.py` | datas preservadas, timecode na extração, referência pela assinatura técnica, prévia de 3 quadros |
 | `test_hevc.py` | XAVC HS: `hvcC` (perfil/nível/4:2:2/10-bit), codec pelo conteúdo do `mdat`, troca de cabeçalho bit a bit, recusa da reconstrução, prévia |
+| `test_layouts.py` | layout do cabeçalho por câmera (FX3 × FX30): diagnóstico pela estrutura, referência só com o mesmo layout, troca de cabeçalho e reconstrução bit a bit |
 | `test_usability.py` | relatório CSV que falha (log + aviso, recuperados intactos), unidade de tamanho, diagnóstico completo no Detalhes, extração bruta selecionável sem referência |
 | `test_i18n.py` | catálogo completo PT/EN, mesmos parâmetros nos dois idiomas, CSV em inglês |
 | `test_updater.py` | comparação de versões, intervalo de 24 h, pular versão, 404, escolha do instalador por sistema |
