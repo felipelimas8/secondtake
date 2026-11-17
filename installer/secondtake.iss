@@ -5,27 +5,40 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+; canal (estável/beta), passado pelo build a partir de src\secondtake\channel.py
+#ifndef AppName
+  #define AppName "Second Take"
+#endif
+#ifndef FilePrefix
+  #define FilePrefix "SecondTake"
+#endif
+#ifndef AppId
+  #define AppId "{{6E3C2B7A-5D1F-4C8E-9A2B-3F7E1D4C5A60}"
+#endif
+#ifndef IconFile
+  #define IconFile "icon.ico"
+#endif
 
 [Setup]
-AppId={{6E3C2B7A-5D1F-4C8E-9A2B-3F7E1D4C5A60}
-AppName=Second Take
+AppId={#AppId}
+AppName={#AppName}
 AppVersion={#AppVersion}
-AppVerName=Second Take {#AppVersion}
+AppVerName={#AppName} {#AppVersion}
 AppPublisher=Super8 Produtora
 AppPublisherURL=https://github.com/felipelimas8/secondtake
 AppSupportURL=https://github.com/felipelimas8/secondtake/issues
 AppUpdatesURL=https://github.com/felipelimas8/secondtake/releases/latest
 AppCopyright=Copyright (C) 2026 Super8 Produtora
-DefaultDirName={autopf}\Second Take
-DefaultGroupName=Second Take
+DefaultDirName={autopf}\{#AppName}
+DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..\dist
-OutputBaseFilename=SecondTake-{#AppVersion}-Windows-x64-Setup
-SetupIconFile=..\assets\icon.ico
-UninstallDisplayIcon={app}\Second Take.exe
-UninstallDisplayName=Second Take
+OutputBaseFilename={#FilePrefix}-{#AppVersion}-Windows-x64-Setup
+SetupIconFile=..\assets\{#IconFile}
+UninstallDisplayIcon={app}\{#AppName}.exe
+UninstallDisplayName={#AppName}
 LicenseFile=..\LICENSE
 Compression=lzma2/max
 SolidCompression=yes
@@ -40,8 +53,8 @@ Name: "pt"; MessagesFile: "compiler:Languages\BrazilianPortuguese.isl"
 Name: "en"; MessagesFile: "compiler:Default.isl"
 
 [CustomMessages]
-pt.LaunchApp=Abrir o Second Take agora
-en.LaunchApp=Open Second Take now
+pt.LaunchApp=Abrir o {#AppName} agora
+en.LaunchApp=Open {#AppName} now
 pt.Readme=Leia-me
 en.Readme=Read me
 
@@ -49,11 +62,11 @@ en.Readme=Read me
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
 
 [Files]
-Source: "..\dist\Second Take\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\dist\{#AppName}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Second Take"; Filename: "{app}\Second Take.exe"
-Name: "{autodesktop}\Second Take"; Filename: "{app}\Second Take.exe"; Tasks: desktopicon
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppName}.exe"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppName}.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\Second Take.exe"; Description: "{cm:LaunchApp}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppName}.exe"; Description: "{cm:LaunchApp}"; Flags: nowait postinstall skipifsilent

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Gera "Second Take.app", o instalador .dmg e um .zip em dist/.
+# Gera o app ("Second Take.app" ou "Second Take Beta.app", conforme src/secondtake/channel.py),
+# o instalador .dmg e um .zip em dist/.
 # Uso: scripts/build_macos.sh [--install]   (--install copia o app para /Applications)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -13,16 +14,20 @@ esac
 python3 -m pip install -q -e ".[build]"
 VERSION=$(python3 -c "import secondtake; print(secondtake.__version__)")
 ARCH=$(uname -m)
+# canal (estável/beta): nome do app, bundle id, prefixo dos arquivos e ícone
+eval "$(python3 -m secondtake.channel --sh)"
+ICON_SRC=assets/icon_1024.png
+[ "$CHANNEL" = beta ] && ICON_SRC=assets/icon_beta_1024.png
 
-# ícone: assets/icon_1024.png -> build/SecondTake.icns
+# ícone: $ICON_SRC -> build/SecondTake.icns
 mkdir -p build
 ICNS=build/SecondTake.icns
-if [ -f assets/icon_1024.png ]; then
+if [ -f "$ICON_SRC" ]; then
   SET=build/SecondTake.iconset
   rm -rf "$SET" && mkdir -p "$SET"
   for s in 16 32 128 256 512; do
-    sips -z $s $s assets/icon_1024.png --out "$SET/icon_${s}x${s}.png" >/dev/null
-    sips -z $((s*2)) $((s*2)) assets/icon_1024.png --out "$SET/icon_${s}x${s}@2x.png" >/dev/null
+    sips -z $s $s "$ICON_SRC" --out "$SET/icon_${s}x${s}.png" >/dev/null
+    sips -z $((s*2)) $((s*2)) "$ICON_SRC" --out "$SET/icon_${s}x${s}@2x.png" >/dev/null
   done
   iconutil -c icns "$SET" -o "$ICNS"
 fi
@@ -30,12 +35,12 @@ ICON=()
 [ -f "$ICNS" ] && ICON=(--icon "$ICNS")
 
 python3 -m PyInstaller --windowed --noconfirm --clean \
-  --name "Second Take" --paths src --collect-submodules secondtake \
+  --name "$APP_NAME" --paths src --collect-submodules secondtake \
   --collect-data customtkinter --collect-data secondtake --collect-all tkinterdnd2 \
-  --osx-bundle-identifier br.com.super8.secondtake \
+  --osx-bundle-identifier "$BUNDLE_ID" \
   ${ICON[@]+"${ICON[@]}"} scripts/secondtake_app.py
 
-APP="dist/Second Take.app"
+APP="dist/$APP_NAME.app"
 PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST" || true
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST" || true
@@ -46,10 +51,10 @@ xattr -cr "$APP"
 codesign -s - --force --deep "$APP"
 
 # .zip (para quem prefere)
-(cd dist && ditto -c -k --keepParent "Second Take.app" "SecondTake-$VERSION-macOS-$ARCH.zip")
+(cd dist && ditto -c -k --keepParent "$APP_NAME.app" "$FILE_PREFIX-$VERSION-macOS-$ARCH.zip")
 
 # instalador .dmg: janela com fundo, ícone do app, atalho para Aplicativos e "Como abrir.txt"
-DMG="dist/SecondTake-$VERSION-macOS-$ARCH.dmg"
+DMG="dist/$FILE_PREFIX-$VERSION-macOS-$ARCH.dmg"
 rm -f "$DMG"
 STAGE=build/dmg
 rm -rf "$STAGE" && mkdir -p "$STAGE"
@@ -68,11 +73,11 @@ if command -v create-dmg >/dev/null 2>&1; then
   [ -f "$ICNS" ] && VOLICON=(--volicon "$ICNS")
   dmg() {
     create-dmg \
-      --volname "Second Take $VERSION" ${VOLICON[@]+"${VOLICON[@]}"} \
+      --volname "$APP_NAME $VERSION" ${VOLICON[@]+"${VOLICON[@]}"} \
       --background "$BG" \
       --window-pos 200 120 --window-size 680 620 \
       --icon-size 104 --text-size 13 \
-      --icon "Second Take.app" 170 200 --hide-extension "Second Take.app" \
+      --icon "$APP_NAME.app" 170 200 --hide-extension "$APP_NAME.app" \
       --app-drop-link 510 200 \
       --icon "Leia-me · Read me.txt" 600 52 \
       --icon "Abrir Ajustes de Segurança.webloc" 340 520 --hide-extension "Abrir Ajustes de Segurança.webloc" \
@@ -84,14 +89,14 @@ if command -v create-dmg >/dev/null 2>&1; then
 else
   echo "create-dmg não encontrado (brew install create-dmg): gerando DMG simples, sem layout." >&2
   ln -s /Applications "$STAGE/Aplicativos"
-  hdiutil create -volname "Second Take $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+  hdiutil create -volname "$APP_NAME $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 fi
 echo "OK: $APP"
 echo "    $DMG"
-echo "    dist/SecondTake-$VERSION-macOS-$ARCH.zip"
+echo "    dist/$FILE_PREFIX-$VERSION-macOS-$ARCH.zip"
 
 if [ "${1:-}" = "--install" ]; then
-  rm -rf "/Applications/Second Take.app"
+  rm -rf "/Applications/$APP_NAME.app"
   cp -R "$APP" /Applications/
   echo "Instalado em /Applications"
 fi
