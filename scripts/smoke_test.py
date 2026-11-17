@@ -20,6 +20,11 @@ TIMEOUT = 180   # 1ª abertura de um binário recém-assinado no runner pode dem
 
 
 def main(argv: list[str]) -> int:
+    for stream in (sys.stdout, sys.stderr):      # console do Windows (cp1252): acentos legíveis no log do CI
+        try:
+            stream.reconfigure(encoding='utf-8', errors='replace')
+        except (AttributeError, ValueError):
+            pass
     if len(argv) != 1 or not os.path.isfile(argv[0]):
         print(__doc__, file=sys.stderr)
         return 2

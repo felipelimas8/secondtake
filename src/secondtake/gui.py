@@ -1479,13 +1479,15 @@ def _smoke() -> int:
         app.update_idletasks()
         info.update(tk=str(app.tk.call('info', 'patchlevel')), customtkinter=ctk.__version__,
                     dnd=bool(app.dnd), lang=i18n.get_lang(), title=app.title(),
-                    mapped=bool(app.winfo_ismapped()), icon=app_icon(32) is not None,
+                    state=app.state(), mapped=bool(app.winfo_ismapped()), icon=app_icon(32) is not None,
                     rows=len(app.tree.get_children()) if hasattr(app, 'tree') else None)
         app.destroy()
         if TkinterDnD is not None and not info['dnd']:
             errors.append('tkdnd não carregou (arrastar e soltar)')
-        if not info['mapped']:
-            errors.append('a janela principal não apareceu')
+        # a janela saiu do withdraw (sem splash, _reveal chama deiconify). Não usar winfo_ismapped:
+        # no runner Windows do GitHub (serviço, sem área de trabalho visível) ele é sempre False
+        if info['state'] not in ('normal', 'zoomed'):
+            errors.append(f"a janela principal não foi exibida (state={info['state']})")
         if not info['icon']:
             errors.append('ícone do app não encontrado no pacote')
     except BaseException:
