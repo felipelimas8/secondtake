@@ -7,6 +7,7 @@ idioma (PT/EN) pode ser trocado na hora pelo seletor do cabeçalho.
 """
 from __future__ import annotations
 
+import logging
 import os
 import platform
 import queue
@@ -52,6 +53,10 @@ PAL = {
     'info':     ('#1565C0', '#7DB4F5'),
     'danger':   ('#C62828', '#F28B82'),
 }
+# painel Detalhes: 320 px (antes 300) e coluna de valores com 20 px a mais (190), para um formato
+# XAVC como AVC200_3840_2160_H422P@L52 caber numa linha só
+DETAILS_W = 320
+DETAILS_VALUE_W = 190
 STATUS_ICON = {'ok': '✓', 'warn': '●', 'info': '●', 'danger': '▲', 'muted': '·'}
 
 
@@ -91,12 +96,7 @@ def free_space(path: str) -> float:
     return shutil.disk_usage(path).free
 
 
-def human(n):
-    for u in ('B', 'KB', 'MB', 'GB', 'TB'):
-        if n < 1024:
-            return f'{n:.1f} {u}' if u != 'B' else f'{n} B'
-        n /= 1024
-    return f'{n:.1f} PB'
+human = core.fmt_size          # mesma unidade na tabela, no Detalhes e nos avisos de espaço
 
 
 def _mode_idx():
@@ -119,6 +119,51 @@ def kind(c: core.Clip) -> str:
             return 'danger'
         return 'warn'
     return 'danger'
+
+
+class ScrollBox(ctk.CTkFrame):
+    """Área com rolagem vertical cuja barra só aparece quando o conteúdo não cabe.
+    (O CTkScrollableFrame mostra a barra sempre.) O conteúdo vai em `.inner`; a roda do
+    mouse é tratada pela App (`_on_wheel`), que encaminha para `wheel()`."""
+
+    def __init__(self, master, bg_key: str):
+        super().__init__(master, fg_color='transparent', corner_radius=0)
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        self.canvas = tk.Canvas(self, highlightthickness=0, bd=0, height=1, bg=col(bg_key))
+        self.canvas.grid(row=0, column=0, sticky='nsew')
+        self.bar = ctk.CTkScrollbar(self, command=self.canvas.yview, width=12)
+        self.canvas.configure(yscrollcommand=self.bar.set)
+        self.inner = ctk.CTkFrame(self.canvas, fg_color=PAL[bg_key], corner_radius=0)
+        self._win = self.canvas.create_window(0, 0, window=self.inner, anchor='nw')
+        self.inner.bind('<Configure>', self._sync, add='+')
+        self.canvas.bind('<Configure>', self._sync, add='+')
+
+    def _sync(self, _=None):
+        w, have = self.canvas.winfo_width(), self.canvas.winfo_height()
+        self.canvas.itemconfigure(self._win, width=w)
+        need = self.inner.winfo_reqheight()
+        self.canvas.configure(scrollregion=(0, 0, w, need))
+        if need > have + 1:
+            if not self.bar.winfo_ismapped():
+                self.bar.grid(row=0, column=1, sticky='ns')
+        elif self.bar.winfo_ismapped():
+            self.bar.grid_remove()
+            self.canvas.yview_moveto(0)
+
+    def contains(self, widget) -> bool:
+        return widget is not None and str(widget).startswith(str(self))
+
+    def wheel(self, e):
+        if not self.bar.winfo_ismapped():
+            return
+        if getattr(e, 'num', None) in (4, 5):                  # X11
+            step = -1 if e.num == 4 else 1
+        elif sys.platform == 'darwin':
+            step = -e.delta
+        else:
+            step = -int(e.delta / 120) or (-1 if e.delta > 0 else 1)
+        self.canvas.yview_scroll(step, 'units')
 
 
 def secondary(**kw):
@@ -198,6 +243,8 @@ class App(ctk.CTk, _DnDBase):
         self._style_ttk()
         self._build()
         self._install_menu()
+        for ev in ('<MouseWheel>', '<Button-4>', '<Button-5>'):
+            self.bind_all(ev, self._on_wheel, add='+')
         self.after(100, self._poll)
         self.after(2500, lambda: self.check_updates(manual=False))
         if sys.platform == 'win32':
@@ -336,10 +383,11 @@ class App(ctk.CTk, _DnDBase):
         self.tree.bind('<<TreeviewSelect>>', lambda e: (self._update_actions(), self._show_details()))
 
         # painel de detalhes (metadados do clipe selecionado)
-        self.details = ctk.CTkFrame(self.body, fg_color=PAL['card2'], corner_radius=8, width=300)
+        self.details = ctk.CTkFrame(self.body, fg_color=PAL['card2'], corner_radius=8, width=DETAILS_W)
         self.details.grid(row=0, column=2, sticky='nsew', padx=(6, 6), pady=6)
         self.details.grid_propagate(False)
         self.details.grid_columnconfigure(0, weight=1)
+        self.details.grid_rowconfigure(4, weight=1)        # a área de metadados ocupa o resto e rola
         self.tree.bind('<Double-1>', lambda e: self.advanced())
         self._tag_colors()
 
@@ -382,7 +430,8 @@ class App(ctk.CTk, _DnDBase):
             row=1, column=1, columnspan=3, sticky='w', pady=(2, 4))
         self._sync_dst()
 
-        self.status = ctk.CTkLabel(foot, text=str(self.status_text), font=(FONT, 12), text_color=PAL['muted'],
+        self.status = ctk.CTkLabel(foot, text=str(self.status_text), font=(FONT, 12),
+                                   text_color=PAL['warn' if getattr(self, 'status_warn', False) else 'muted'],
                                    anchor='w')
         self.status.grid(row=2, column=0, columnspan=4, sticky='ew', padx=20, pady=(0, 2))
         self.prog = ctk.CTkProgressBar(foot, height=6)
@@ -478,7 +527,13 @@ class App(ctk.CTk, _DnDBase):
         for k in ('warn', 'info', 'danger', 'muted'):
             self.tree.tag_configure(k, foreground=col('text'))
 
+    def _on_wheel(self, e):
+        box = getattr(self, '_dscroll', None)
+        if box is not None and box.winfo_exists() and box.contains(self.winfo_containing(e.x_root, e.y_root)):
+            box.wheel(e)
+
     def _show_details(self):
+        self._dscroll = None
         for w in self.details.winfo_children():
             w.destroy()
         sel = self._selected()
@@ -493,20 +548,22 @@ class App(ctk.CTk, _DnDBase):
             row=1, column=0, sticky='ew', padx=14, pady=(0, 8))
         self._show_preview(c)                    # no topo: o painel não rola em janelas baixas
         rows = core.meta_rows(c)
-        box = ctk.CTkFrame(self.details, fg_color='transparent')
-        box.grid(row=4, column=0, sticky='nsew', padx=14)
+        # metadados (+ Copiar) numa área que rola só quando não cabe; título e prévia ficam fixos
+        self._dscroll = ScrollBox(self.details, 'card2')
+        self._dscroll.grid(row=4, column=0, sticky='nsew', padx=(14, 4), pady=(0, 10))
+        box = self._dscroll.inner
         box.grid_columnconfigure(1, weight=1)
         for i, (k, v) in enumerate(rows):
             ctk.CTkLabel(box, text=k, font=(FONT, 11), text_color=PAL['muted'], anchor='nw', height=16).grid(
                 row=i, column=0, sticky='nw', padx=(0, 10), pady=3)
             ctk.CTkLabel(box, text=v, font=(FONT, 11), text_color=PAL['text'], anchor='nw', justify='left',
-                         wraplength=170, height=16).grid(row=i, column=1, sticky='nw', pady=3)
+                         wraplength=DETAILS_VALUE_W, height=16).grid(row=i, column=1, sticky='nw', pady=3)
 
         def copy():
             self.clipboard_clear()
             self.clipboard_append(c.name + '\n' + '\n'.join(f'{k}: {v}' for k, v in rows))
-        ctk.CTkButton(self.details, text=t('meta.copy'), width=80, height=26, font=(FONT, 11), command=copy,
-                      **secondary()).grid(row=5, column=0, sticky='w', padx=14, pady=(10, 12))
+        ctk.CTkButton(box, text=t('meta.copy'), width=80, height=26, font=(FONT, 11), command=copy,
+                      **secondary()).grid(row=len(rows), column=0, columnspan=2, sticky='w', pady=(10, 2))
 
     # ------------------------------------------------------------ prévia (3 quadros)
     def _show_preview(self, c):
@@ -585,9 +642,11 @@ class App(ctk.CTk, _DnDBase):
         else:
             self.empty.place_forget()
 
-    def _set_status(self, text):
+    def _set_status(self, text, warn: bool = False):
+        """Barra de status. warn=True: aviso discreto (texto em laranja, sem janela)."""
         self.status_text = text
-        self.status.configure(text=str(text))
+        self.status_warn = warn
+        self.status.configure(text=str(text), text_color=PAL['warn' if warn else 'muted'])
 
     def _set_subtitle(self, text):
         self.subtitle_text = text
@@ -726,12 +785,13 @@ class App(ctk.CTk, _DnDBase):
         return [self.clips[int(i)] for i in self.tree.selection()]
 
     def _todo(self):
-        return [c for c in self._selected() if c.status in core.REPAIRABLE and c.reference]
+        # inclui a extração bruta sem referência quando o usuário seleciona a linha
+        return [c for c in self._selected() if core.repairable(c)]
 
     @staticmethod
     def _auto(c):
         """Selecionado automaticamente: reparo de cabeçalho ou reconstrução (não a extração bruta)."""
-        return c.status in core.REPAIRABLE and c.reference and c.extra.get('mode') != 'extrair'
+        return core.auto_selected(c)
 
     def _update_actions(self):
         n = len(self._todo()) if self.clips else 0
@@ -763,11 +823,7 @@ class App(ctk.CTk, _DnDBase):
             audio = t('app.audio_silent')
         else:
             audio = f'{c.audio_db:.0f} dB'
-        verify, detail = str(c.verify or ''), str(c.detail or '')
-        if verify and detail and not verify.startswith(('ERRO', 'ERROR')):
-            diag = f'{verify} · {detail}'
-        else:
-            diag = verify or detail or '—'
+        diag = core.diag_text(c)
         return (f'{STATUS_ICON[kind(c)]}  ' + t(f'status.{c.status}'), action, audio,
                 human(c.size), os.path.basename(c.reference) or '—', diag)
 
@@ -924,28 +980,12 @@ class App(ctk.CTk, _DnDBase):
                     c.verify = L('verify.error', err=msg(e))
                 done += c.size
                 self.q.put(('fix_one', c))
-            if beside:
-                # um relatório em cada <pasta>/Second Take, com os clipes daquela pasta
-                folders = core.group_by_folder(todo)
-                for d in folders:
-                    group = [c for c in self.clips if os.path.dirname(os.path.abspath(c.path)) == d]
-                    try:
-                        rdir = os.path.join(d, core.SAME_FOLDER_DIR)
-                        os.makedirs(rdir, exist_ok=True)
-                        core.write_report(group, os.path.join(rdir, report))
-                    except Exception:
-                        pass
-                shown = os.path.join(next(iter(folders)), core.SAME_FOLDER_DIR) if len(folders) == 1 \
-                    else t('app.out_beside')
-            else:
-                shown = core.report_dir(out, todo)   # saída = origem: relatório na subpasta Second Take
-                try:
-                    os.makedirs(shown, exist_ok=True)
-                    core.write_report(self.clips, os.path.join(shown, report))
-                except Exception:
-                    pass
+            shown, failures = core.write_batch_reports(self.clips, todo, None if beside else out, report)
+            if shown is None:
+                shown = t('app.out_beside')
             stopped = cancel.is_set()
-            self.q.put(('fix_done', n_done if stopped else len(todo), shown, report, len(todo) if stopped else None))
+            self.q.put(('fix_done', n_done if stopped else len(todo), shown, report, len(todo) if stopped else None,
+                        failures))
         threading.Thread(target=work, daemon=True).start()
 
     def cancel(self):
@@ -970,7 +1010,12 @@ class App(ctk.CTk, _DnDBase):
     def export(self):
         p = filedialog.asksaveasfilename(defaultextension='.csv', initialfile=t('csv.diag_name'))
         if p:
-            core.write_report(self.clips, p)
+            try:
+                core.write_report(self.clips, p)
+            except Exception as e:
+                logging.getLogger('secondtake').exception('relatório CSV não exportado: %s', p)
+                self._set_status(L('app.export_failed', err=core.short_err(e)), warn=True)
+                return
             self._set_status(L('app.saved', path=p))
 
     # ------------------------------------------------------------ fila
@@ -978,6 +1023,7 @@ class App(ctk.CTk, _DnDBase):
         if ctk.get_appearance_mode() != self._mode:
             self._style_ttk()
             self._tag_colors()
+            self._show_details()          # o Canvas da área de rolagem não segue o tema sozinho
         try:
             while True:
                 m = self.q.get_nowait()
@@ -1016,7 +1062,10 @@ class App(ctk.CTk, _DnDBase):
                     if self._selected() == [c]:
                         self._show_details()          # prévia do arquivo recuperado logo após o reparo
                 elif k == 'fix_done':
-                    if m[4] is not None:
+                    if m[5]:
+                        _, err = m[5][0]          # caminho e traceback ficam no log
+                        self._set_status(L('app.report_failed', n=m[1], err=core.short_err(err)), warn=True)
+                    elif m[4] is not None:
                         self._set_status(L('app.cancelled', n=m[1], total=m[4], report=m[3], path=m[2]))
                     else:
                         self._set_status(L('app.done_fix', n=m[1], report=m[3], path=m[2]))
@@ -1036,8 +1085,8 @@ class App(ctk.CTk, _DnDBase):
                 elif k == 'update':
                     _, info, manual, err = m
                     if manual:
-                        self._set_status(self.status_text if not isinstance(self.status_text, L)
-                                         or self.status_text.key != 'upd.checking' else L('app.ready'))
+                        if isinstance(self.status_text, L) and self.status_text.key == 'upd.checking':
+                            self._set_status(L('app.ready'))
                         if err is not None:
                             messagebox.showwarning('Second Take', t('upd.failed', err=err))
                         elif info is None:
@@ -1469,6 +1518,11 @@ def main():
         fh.write(f'\n--- Second Take {__version__} · {platform.platform()} · Python {platform.python_version()}\n')
         fh.flush()
         faulthandler.enable(fh)          # registra até falhas fatais (segfault) do Tk
+        h = logging.StreamHandler(fh)    # logging.exception (relatório não gravado etc.) no mesmo arquivo
+        h.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(name)s: %(message)s'))
+        lg = logging.getLogger('secondtake')
+        lg.addHandler(h)
+        lg.setLevel(logging.INFO)
     except Exception:
         pass
     if os.environ.get('SECONDTAKE_SMOKE'):

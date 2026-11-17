@@ -8,6 +8,10 @@
 - **Release inteira ou nada**: macOS e Windows são gerados em paralelo e a release só é criada quando os dois passam. Antes, uma falha no Windows deixava a release como Latest só com os arquivos do Mac (foi o que aconteceu na 0.9.7).
 - **SHA256SUMS.txt** em cada release e na pré-release da `main`, para conferir os downloads.
 - Empacotamento: o PyInstaller passa a levar `PIL._tkinter_finder` explicitamente (o hook do Pillow o deixava de fora; no Linux o ícone do cabeçalho quebrava a abertura).
+- **Relatório que não grava não some mais em silêncio** (auditoria B3): se o CSV do fim do lote não puder ser gravado (disco cheio, sem permissão, pasta removida), o erro vai para o log com o caminho e o traceback, e a barra de status mostra um aviso em laranja. Os clipes já recuperados não são afetados. Com "Salvar junto dos originais", uma pasta com problema não impede os relatórios das outras. Exportar CSV ganhou o mesmo tratamento.
+- **Mesmo tamanho na tabela e no Detalhes**: os dois (e os avisos de espaço livre) usam unidades decimais, como o Finder e os cartões (1 MB = 1.000.000 bytes). Antes a tabela dividia por 1024 e mostrava 768.7 MB para um clipe que o Detalhes mostrava como 806.0 MB.
+- **Detalhes do clipe**: painel 20 px mais largo, para formatos como `AVC200_3840_2160_H422P@L52` caberem numa linha; o **diagnóstico completo** aparece no topo dos metadados (na tabela ele é cortado na borda); quando os metadados não cabem na altura da janela, a área rola, com a barra aparecendo só nesse caso (a prévia continua fixa no topo).
+- **Último recurso sem referência**: quando não há referência válida e o clipe só pode ser extraído, selecionar a linha habilita o botão Reparar direto, sem passar pelo Avançado. A extração bruta continua fora da seleção automática, e a barra de status avisa "selecione a linha para extrair".
 - README atualizado (arquitetura, metadados/timecode/prévia, testes, build).
 
 ## 0.9.10 — 2026-11-17

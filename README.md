@@ -89,8 +89,8 @@ Para experimentar sem material real, baixe `SecondTake-amostras-teste.zip` na p�
 
 ### Interface
 1. **Analisar**: escolhe uma pasta de brutas e examina todos os clipes. **Analisar arquivos…** examina só os clipes escolhidos e busca referências na mesma pasta.
-2. Os arquivos reparáveis já vêm selecionados. Clique em **Reparar selecionados**.
-3. Selecione um clipe para ver os **Detalhes**: metadados técnicos e uma prévia de três quadros (10 %, 50 % e 90 %), também em clipes com cabeçalho danificado e logo após o reparo.
+2. Os arquivos reparáveis já vêm selecionados. Clique em **Reparar**. Clipes de último recurso (extração bruta) não entram sozinhos: selecione a linha para incluí-los.
+3. Selecione um clipe para ver os **Detalhes**: o diagnóstico completo, os metadados técnicos e uma prévia de três quadros (10 %, 50 % e 90 %), também em clipes com cabeçalho danificado e logo após o reparo.
 4. **Avançado…** abre os controles manuais de um arquivo: modo, referência, offset e **Simular**.
 5. **Salvar junto dos originais** (chave no rodapé): grava cada recuperado na subpasta `Second Take` dentro da pasta do próprio clipe. O app nunca grava ao lado do original.
 
@@ -133,6 +133,7 @@ A suíte **não usa material de câmera**. O `tests/synth.py` gera clipes sinté
 | `test_hardening.py` | `find_moov`, cache de perfis, CSV contra fórmulas, `config.json`, XML com `defusedxml`, arquivos malformados |
 | `test_pro.py` | datas preservadas, timecode na extração, referência pela assinatura técnica, prévia de 3 quadros |
 | `test_hevc.py` | XAVC HS: `hvcC` (perfil/nível/4:2:2/10-bit), codec pelo conteúdo do `mdat`, troca de cabeçalho bit a bit, recusa da reconstrução, prévia |
+| `test_usability.py` | relatório CSV que falha (log + aviso, recuperados intactos), unidade de tamanho, diagnóstico completo no Detalhes, extração bruta selecionável sem referência |
 | `test_i18n.py` | catálogo completo PT/EN, mesmos parâmetros nos dois idiomas, CSV em inglês |
 | `test_updater.py` | comparação de versões, intervalo de 24 h, pular versão, 404, escolha do instalador por sistema |
 

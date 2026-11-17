@@ -179,6 +179,7 @@ def test_hevc_without_moov_is_refused_with_clear_diagnosis(folder, capsys):
     c = by(core.scan(folder['dir']), 'H0002.MP4')
     assert c.status == core.NO_MOOV
     assert c.reference == ''                           # fora do lote de reparo da interface
+    assert not core.repairable(c)                      # nem selecionando a linha à mão
     assert 'XAVC HS' in str(c.detail)
     with pytest.raises(ValueError, match='H.265'):
         core.repair(c, folder['out'])

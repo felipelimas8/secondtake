@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import array
 import csv
+import logging
 import math
 import os
 import shutil
@@ -27,6 +28,8 @@ from dataclasses import dataclass, field
 
 from .i18n import L, Join, msg, t as tr
 from .safeio import atomic_write, copy_times, unique_stem
+
+log = logging.getLogger('secondtake')
 
 HDR = 262144                 # ftyp + uuid + free + cabeçalho mdat (layout XAVC S)
 MDAT_POS = HDR - 16          # 262128
@@ -423,6 +426,28 @@ def read_meta(path: str, moov: bytes | None = None) -> dict:
     return meta
 
 
+def fmt_size(n) -> str:
+    """Tamanho de arquivo em unidades decimais (1 MB = 1.000.000 B), como o Finder e os
+    cartões de memória. Única função de tamanho do app: tabela, Detalhes, avisos de espaço."""
+    n = float(n or 0)
+    if n < 1000:
+        return f'{int(n)} B'
+    for u in ('KB', 'MB', 'GB', 'TB'):
+        n /= 1000
+        if n < 1000 or u == 'TB':
+            return f'{n:.2f} {u}' if u in ('GB', 'TB') else f'{n:.1f} {u}'
+    return ''
+
+
+def diag_text(c: 'Clip') -> str:
+    """Diagnóstico completo do clipe, no idioma atual: resultado da verificação (se houver)
+    + diagnóstico. É o mesmo texto da coluna da tabela, sem o corte da borda."""
+    verify, detail = str(c.verify or ''), str(c.detail or '')
+    if verify and detail and not verify.startswith(('ERRO', 'ERROR')):
+        return f'{verify} · {detail}'
+    return verify or detail or '—'
+
+
 def meta_rows(c: 'Clip') -> list[tuple[str, str]]:
     """Linhas (rótulo, valor) prontas para exibir, já no idioma atual."""
     m = c.extra.get('meta') or {}
@@ -432,6 +457,7 @@ def meta_rows(c: 'Clip') -> list[tuple[str, str]]:
         if val not in (None, '', '—'):
             rows.append((tr(key), str(val)))
 
+    add('meta.diagnosis', diag_text(c))          # texto inteiro (na tabela a coluna corta)
     add('meta.camera', ' · '.join(x for x in (m.get('xml_camera'), m.get('xml_serial') and f"S/N {m['xml_serial']}")
                                   if x))
     add('meta.created', (m.get('xml_created') or '').replace('T', ' ')[:19])
@@ -462,8 +488,7 @@ def meta_rows(c: 'Clip') -> list[tuple[str, str]]:
     if m.get('audio_codec'):
         add('meta.audio', f"{m['audio_codec']} · {m.get('audio_channels')} ch · {m.get('audio_rate', 0) / 1000:g} kHz"
                           f" · {m.get('audio_bits')}-bit")
-    add('meta.size', f"{m.get('file_size', c.size) / 1e9:.2f} GB" if m.get('file_size', c.size) > 1e9
-        else f"{m.get('file_size', c.size) / 1e6:.1f} MB")
+    add('meta.size', fmt_size(m.get('file_size', c.size)))
     return rows
 
 
@@ -573,6 +598,22 @@ def diagnose(path: str) -> Clip:
     if c.audio_db is not None and c.audio_db < -75:
         c.note(L('diag.silent'))
     return c
+
+
+def repairable(c: Clip) -> bool:
+    """Pode entrar num lote de reparo: tem referência, ou é extração bruta (que funciona
+    sem referência: varre o arquivo atrás de NALs H.264). H.265 sem índice nunca entra."""
+    if c.status not in REPAIRABLE:
+        return False
+    if c.reference:
+        return True
+    return c.extra.get('mode') == 'extrair' and not is_hevc(c)
+
+
+def auto_selected(c: Clip) -> bool:
+    """Já vem selecionado depois da análise: troca de cabeçalho ou reconstrução. A extração
+    bruta (último recurso) só entra se o usuário selecionar a linha."""
+    return repairable(c) and bool(c.reference) and c.extra.get('mode') != 'extrair'
 
 
 def scan(folder: str, progress=None) -> list[Clip]:
@@ -1066,6 +1107,43 @@ def csv_safe(v):
     if isinstance(v, str) and v.startswith(CSV_FORMULA):
         return "'" + v
     return v
+
+
+def write_batch_reports(clips: list[Clip], todo: list[Clip], out: str | None, name: str):
+    """Relatórios CSV do fim de um lote de reparo.
+
+    out=None ("salvar junto dos originais"): um relatório em cada <pasta do clipe>/Second Take,
+    com os clipes daquela pasta. Senão, um relatório só, junto dos recuperados.
+    Retorna (onde mostrar, [(caminho, erro)]). Uma falha aqui (disco cheio, sem permissão,
+    pasta removida) vai para o log e para a lista, e nunca afeta os clipes já recuperados."""
+    failures = []
+
+    def one(group, rdir):
+        path = os.path.join(rdir, name)
+        try:
+            os.makedirs(rdir, exist_ok=True)
+            write_report(group, path)
+        except Exception as e:
+            log.exception('relatório CSV não gravado: %s', path)
+            failures.append((path, e))
+
+    if out is None:
+        folders = group_by_folder(todo)
+        for d in folders:
+            one([c for c in clips if os.path.dirname(os.path.abspath(c.path)) == d],
+                os.path.join(d, SAME_FOLDER_DIR))
+        shown = os.path.join(next(iter(folders)), SAME_FOLDER_DIR) if len(folders) == 1 else None
+    else:
+        shown = report_dir(out, todo)            # saída = origem: relatório na subpasta Second Take
+        one(clips, shown)
+    return shown, failures
+
+
+def short_err(e: BaseException) -> str:
+    """Erro curto para a barra de status: sem o caminho (que vai inteiro para o log)."""
+    if isinstance(e, OSError) and e.strerror:
+        return e.strerror
+    return str(msg(e))
 
 
 def write_report(clips: list[Clip], path: str):
