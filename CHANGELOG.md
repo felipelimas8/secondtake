@@ -5,6 +5,7 @@
 - **Manter o nome original na pasta dos originais**: em vez de recusar, a saída vai para a subpasta `Second Take`, com o mesmo nome do clipe (`Second Take/C0001.MP4`). Se o nome já existir lá, vira `C0001_2.MP4`: nada é sobrescrito.
 - O XML de câmera acompanha o clipe também na numeração (`C0001_2M01.XML`) e mantém as datas do original.
 - Título, tela de apresentação e diálogos usam o nome do canal ("Second Take Beta").
+- **`.RSV` real da Sony**: o arquivo de gravação interrompida não tem cabeçalho nenhum. Ele começa direto nos dados, com os metadados `rtmd` no byte 0 (medido num `.RSV` real de uma FX2), e o app procurava os dados na posição de um clipe com cabeçalho (262144 na FX3), por isso caía na extração bruta. Agora o início é detectado no próprio arquivo, e a reconstrução põe o cabeçalho de um clipe sadio da mesma câmera na frente e desloca o índice. Para isso, deixe na pasta um `.MP4` sadio da mesma câmera, com as mesmas configurações.
 
 ## 0.10.0b1 — 2026-11-16 (beta)
 - **Second Take Beta**: novo canal de testes, publicado a partir do branch `beta`. É um app separado ("Second Take Beta", ícone com faixa BETA, bundle id, ajustes, log e entrada no menu Iniciar próprios), que pode ficar instalado ao lado da versão estável sem substituí-la.

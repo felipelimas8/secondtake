@@ -491,6 +491,28 @@ def starts_at_first_chunk(p: 'Plan') -> bool:
     return p.chunks[0].meta_off - p.data_start < _min_chunk(p.profile)
 
 
+RTMD_SIG = b'\x00\x1c\x01\x00'     # início de cada amostra rtmd (metadados por quadro da Sony)
+
+
+def payload_start(path: str) -> int | None:
+    """Onde começam os dados num arquivo SEM cabeçalho: o .RSV real da Sony (gravação
+    interrompida) é o conteúdo do mdat puro, com a 1ª amostra rtmd no byte 0; a câmera só
+    escreveria ftyp/uuid/free/mdat e o moov ao fechar o clipe. Retorna 0 nesse caso; None
+    se o arquivo tem cabeçalho (começa com uma box, ex. ftyp) e a posição vem da referência."""
+    try:
+        with open(path, 'rb') as f:
+            head = f.read(8)
+    except OSError:
+        return None
+    if head[4:8] == b'ftyp':
+        return None
+    return 0 if head[:4] == RTMD_SIG else None
+
+
+def _shift(c: 'Chunk', d: int) -> 'Chunk':
+    return Chunk(c.meta_off + d, c.video_off + d, c.frame_sizes, c.audio_off + d, c.keys)
+
+
 def plan(path: str, refs: list[str], find_moov, data_start: int | None = None) -> Plan:
     """Testa cada referência e fica com a que explica mais blocos do arquivo."""
     best, seen, errors = None, {}, []
@@ -504,7 +526,11 @@ def plan(path: str, refs: list[str], find_moov, data_start: int | None = None) -
         if k in seen and seen[k].n_keys >= prof.n_keys:
             continue
         seen[k] = prof
-        start = prof.data_start if data_start is None else data_start
+        if data_start is not None:
+            start = data_start
+        else:
+            raw = payload_start(path)
+            start = prof.data_start if raw is None else raw
         chunks, end, reason, gaps = scan_chunks(path, prof, start)
         if best is None or (len(chunks), prof.n_keys) > (len(best.chunks), best.profile.n_keys):
             best = Plan(prof, chunks, end, reason, start, gaps)
@@ -520,16 +546,23 @@ def plan(path: str, refs: list[str], find_moov, data_start: int | None = None) -
 
 
 def write(path: str, p: Plan, dst: str, chunk_cb=None) -> str:
+    """Cabeçalho da referência + os dados do arquivo + moov novo.
+    Os dados podem estar em outra posição na fonte (p.data_start) que na saída
+    (prof.data_start, o fim do cabeçalho da referência): é o caso do .RSV, que começa no
+    byte 0. Os offsets do índice novo são deslocados pela diferença."""
     prof = p.profile
-    hdr = bytearray(prof.header[:p.data_start] if p.data_start <= len(prof.header) else prof.header)
-    if len(hdr) != p.data_start:
+    hdr = bytearray(prof.header)
+    out_start = prof.data_start
+    if len(hdr) != out_start:
         raise ValueError(L('err.offset_mismatch'))
     # mdat com largesize ocupa os 16 bytes finais do cabeçalho
-    mdat_pos = p.data_start - 16
+    mdat_pos = out_start - 16
     if hdr[mdat_pos + 4:mdat_pos + 8] != b'mdat':
         raise ValueError(L('err.ref_mdat'))
-    hdr[mdat_pos + 8:mdat_pos + 16] = struct.pack('>Q', p.data_end - mdat_pos)
-    moov = build_moov(prof, p.chunks)
+    shift = out_start - p.data_start
+    hdr[mdat_pos + 8:mdat_pos + 16] = struct.pack('>Q', p.data_end + shift - mdat_pos)
+    chunks = [_shift(c, shift) for c in p.chunks] if shift else p.chunks
+    moov = build_moov(prof, chunks)
     total = p.data_end - p.data_start
     copied = 0
     with open(path, 'rb') as src, atomic_write(dst) as out:
