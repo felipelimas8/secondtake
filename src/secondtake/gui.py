@@ -202,7 +202,10 @@ class App(ctk.CTk, _DnDBase):
         if splash is not None:
             splash.finish(self._reveal)   # tempo mínimo de tela, depois mostra a janela e some com fade
         else:
-            self._reveal()
+            # Nunca revelar antes do mainloop: no Windows, o CTk.mainloop() esconde a janela para
+            # pintar a barra de título e, como houve um withdraw() antes, não a mostra de novo.
+            # Agendado, o _reveal roda já dentro do mainloop, como no caminho com splash.
+            self.after(0, self._reveal)
 
     def _reveal(self):
         self.update_idletasks()
