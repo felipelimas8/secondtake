@@ -1,5 +1,6 @@
 name: release
 
+# Tags vX.Y.Z -> release oficial. Tags vX.Y.Z-beta.N (branch beta) -> pré-release do Second Take Beta.
 on:
   push:
     tags: ["v*"]
@@ -25,9 +26,10 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/SecondTake-*-macOS-*.dmg
-            dist/SecondTake-*-macOS-*.zip
+            dist/SecondTake*-*-macOS-*.dmg
+            dist/SecondTake*-*-macOS-*.zip
             dist/SecondTake-amostras-teste.zip
+          prerelease: ${{ contains(github.ref_name, '-beta') }}
           generate_release_notes: true
 
   windows-app:
@@ -50,5 +52,6 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: |
-            dist/SecondTake-*-Windows-x64-Setup.exe
-            dist/SecondTake-*-Windows-x64-portatil.zip
+            dist/SecondTake*-*-Windows-x64-Setup.exe
+            dist/SecondTake*-*-Windows-x64-portatil.zip
+          prerelease: ${{ contains(github.ref_name, '-beta') }}

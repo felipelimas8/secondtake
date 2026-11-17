@@ -38,7 +38,7 @@ version = { attr = "secondtake.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-secondtake = ["icon.png", "icon.ico"]
+secondtake = ["icon.png", "icon.ico", "icon_beta.png", "icon_beta.ico"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

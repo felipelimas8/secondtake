@@ -17,6 +17,8 @@ import os
 import subprocess
 import sys
 
+from .channel import APP_NAME, FILE_PREFIX
+
 LANGS = ('pt', 'en')
 LANG_NAMES = {'pt': 'Português', 'en': 'English'}
 _lang = 'pt'
@@ -431,11 +433,11 @@ def set_lang(lang: str):
 
 def _config_path() -> str:
     if sys.platform == 'darwin':
-        base = os.path.expanduser('~/Library/Application Support/Second Take')
+        base = os.path.expanduser(f'~/Library/Application Support/{APP_NAME}')
     elif sys.platform == 'win32':
-        base = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), 'Second Take')
+        base = os.path.join(os.environ.get('APPDATA', os.path.expanduser('~')), APP_NAME)
     else:
-        base = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config')), 'secondtake')
+        base = os.path.join(os.environ.get('XDG_CONFIG_HOME', os.path.expanduser('~/.config')), FILE_PREFIX.lower())
     return os.path.join(base, 'config.json')
 
 
