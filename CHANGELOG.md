@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.5 — 2026-11-16
+- Mac: o item **Sobre o Second Take** voltou ao menu do app quando o app é gerado com Python/Tk 9 (Homebrew), que não cria esse item sozinho.
+- (A 0.9.4 foi retirada: saiu por engano com arquivos da versão beta.)
+
 ## 0.9.3 — 2026-11-16
 - **Arquivos .RSV**: o app passa a aceitar direto o arquivo temporário que as câmeras Sony deixam quando a gravação é interrompida (bateria, cartão removido, superaquecimento). Ele aparece como "Sem índice" e sai reconstruído como `_RECONSTRUIDO.MP4`. Funciona na análise de pasta, na escolha de arquivos e no arrastar e soltar.
 
