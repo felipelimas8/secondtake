@@ -25,12 +25,13 @@ except Exception:  # pragma: no cover
     DND_FILES = TkinterDnD = None
 
 from . import __version__, core, i18n, updater
+from .channel import APP_NAME, BETA, FILE_PREFIX, ICON_ICO, ICON_PNG
 from .i18n import L, msg, t
 
 REPO_URL = 'https://github.com/felipelimas8/secondtake'
 ISSUES_URL = REPO_URL + '/issues'
 LICENSE_URL = 'https://www.gnu.org/licenses/gpl-3.0.html'
-RELEASES_URL = REPO_URL + '/releases/latest'
+RELEASES_URL = REPO_URL + ('/releases' if BETA else '/releases/latest')
 
 FONT = 'SF Pro Text' if sys.platform == 'darwin' else 'Segoe UI' if sys.platform == 'win32' else 'Helvetica'
 MONO = 'SF Mono' if sys.platform == 'darwin' else 'Consolas' if sys.platform == 'win32' else 'Courier'
@@ -59,7 +60,7 @@ def app_icon(size: int):
     try:
         from importlib import resources
         from PIL import Image
-        with resources.files(__package__).joinpath('icon.png').open('rb') as fh:
+        with resources.files(__package__).joinpath(ICON_PNG).open('rb') as fh:
             im = Image.open(fh)
             im.load()
         return ctk.CTkImage(light_image=im, dark_image=im, size=(size, size))
@@ -69,7 +70,10 @@ def app_icon(size: int):
 
 def install_help() -> str:
     key = 'install.help_win' if sys.platform == 'win32' else 'install.help'
-    return t(key, url=RELEASES_URL)
+    txt = t(key, url=RELEASES_URL)
+    if BETA:
+        txt = txt.replace('SecondTake-', FILE_PREFIX + '-').replace('Second Take', APP_NAME)
+    return txt
 
 
 def install_label() -> str:
@@ -170,7 +174,7 @@ class App(ctk.CTk, _DnDBase):
     def _win_icon(self):
         try:
             from importlib import resources
-            with resources.as_file(resources.files(__package__).joinpath('icon.ico')) as p:
+            with resources.as_file(resources.files(__package__).joinpath(ICON_ICO)) as p:
                 self.iconbitmap(str(p))
         except Exception:
             pass
@@ -202,7 +206,7 @@ class App(ctk.CTk, _DnDBase):
     # ------------------------------------------------------------ layout
     def _build(self):
         f = (FONT, 13)
-        self.title(f'Second Take {__version__}')
+        self.title(f'{APP_NAME} {__version__}')
         self.grid_columnconfigure(0, weight=1)
         self.grid_rowconfigure(4, weight=1)
 
@@ -217,7 +221,7 @@ class App(ctk.CTk, _DnDBase):
             logo = ctk.CTkLabel(head, text='T2', width=40, height=40, corner_radius=10,
                                 fg_color=PAL['accent'], text_color='#FFFFFF', font=(FONT, 15, 'bold'))
         logo.grid(row=0, column=0, rowspan=2, padx=(20, 12), pady=14)
-        ctk.CTkLabel(head, text='Second Take', font=(FONT, 18, 'bold'), text_color=PAL['text'],
+        ctk.CTkLabel(head, text=APP_NAME, font=(FONT, 18, 'bold'), text_color=PAL['text'],
                      anchor='w').grid(row=0, column=1, sticky='sw', pady=(14, 0))
         self.subtitle = ctk.CTkLabel(head, text=str(self.subtitle_text), font=(FONT, 12),
                                      text_color=PAL['muted'], anchor='w')
@@ -493,7 +497,7 @@ class App(ctk.CTk, _DnDBase):
             app_menu = tk.Menu(bar, name='apple', tearoff=0)
             # o Tk 8.6 cria sozinho o "Sobre…" (via tkAboutDialog); o Tk 9 (Python do Homebrew) não
             if tk.TkVersion >= 9:
-                app_menu.add_command(label=t('about.title'), command=self.about)
+                app_menu.add_command(label=t('about.title').replace('Second Take', APP_NAME), command=self.about)
                 app_menu.add_separator()
             app_menu.add_command(label=t('upd.menu'), command=lambda: self.check_updates(manual=True))
             app_menu.add_separator()
@@ -532,7 +536,7 @@ class App(ctk.CTk, _DnDBase):
     def _copy_install_help(self):
         self.clipboard_clear()
         self.clipboard_append(install_help())
-        messagebox.showinfo('Second Take', t('about.copied'))
+        messagebox.showinfo(APP_NAME, t('about.copied'))
 
     def preferences(self):
         PrefsDialog(self)
@@ -709,19 +713,19 @@ class App(ctk.CTk, _DnDBase):
             return
         out = self.dst.get()
         if self.src.get() and os.path.abspath(out).startswith(os.path.abspath(self.src.get()) + os.sep):
-            if not messagebox.askyesno('Second Take', t('app.out_inside')):
+            if not messagebox.askyesno(APP_NAME, t('app.out_inside')):
                 return
         total = sum(c.size for c in todo)
         try:
             os.makedirs(out, exist_ok=True)
             free = free_space(out)
         except OSError as e:
-            messagebox.showerror('Second Take', t('app.cant_write', path=out, err=e))
+            messagebox.showerror(APP_NAME, t('app.cant_write', path=out, err=e))
             return
         if free < total * 1.05:
-            messagebox.showerror('Second Take', t('app.no_space', need=human(total), free=human(free)))
+            messagebox.showerror(APP_NAME, t('app.no_space', need=human(total), free=human(free)))
             return
-        if not messagebox.askyesno('Second Take', t('app.confirm', n=len(todo), size=human(total), path=out)):
+        if not messagebox.askyesno(APP_NAME, t('app.confirm', n=len(todo), size=human(total), path=out)):
             return
         self._set_busy(True)
         verify = self.do_verify.get()
@@ -753,7 +757,7 @@ class App(ctk.CTk, _DnDBase):
             return
         c = sel[0]
         if c.status not in core.REPAIRABLE:
-            messagebox.showinfo('Second Take', t('app.intact', name=c.name))
+            messagebox.showinfo(APP_NAME, t('app.intact', name=c.name))
             return
         AdvancedDialog(self, c)
 
@@ -813,15 +817,15 @@ class App(ctk.CTk, _DnDBase):
                         self._set_status(self.status_text if not isinstance(self.status_text, L)
                                          or self.status_text.key != 'upd.checking' else L('app.ready'))
                         if err is not None:
-                            messagebox.showwarning('Second Take', t('upd.failed', err=err))
+                            messagebox.showwarning(APP_NAME, t('upd.failed', err=err))
                         elif info is None:
-                            messagebox.showinfo('Second Take', t('upd.up_to_date', v=__version__))
+                            messagebox.showinfo(APP_NAME, t('upd.up_to_date', v=__version__))
                     if info:
                         self.update_info = info
                         self._show_banner()
                 elif k == 'error':
                     self.busy = False
-                    messagebox.showerror('Second Take', str(m[1]))
+                    messagebox.showerror(APP_NAME, str(m[1]))
                     self._set_status(L('app.scan_error'))
                     self._set_busy(False)
                     self._refresh()
@@ -894,7 +898,7 @@ class AboutDialog(_Dialog):
         icon = app_icon(88)
         if icon:
             ctk.CTkLabel(f, text='', image=icon).pack(pady=(0, 6))
-        ctk.CTkLabel(f, text='Second Take', font=(FONT, 22, 'bold'), text_color=PAL['text']).pack()
+        ctk.CTkLabel(f, text=APP_NAME, font=(FONT, 22, 'bold'), text_color=PAL['text']).pack()
         ctk.CTkLabel(f, text=t('about.version', v=__version__), font=(FONT, 12),
                      text_color=PAL['muted']).pack(pady=(0, 8))
         ctk.CTkLabel(f, text=t('about.tagline'), font=(FONT, 13), text_color=PAL['text'],
@@ -947,10 +951,10 @@ class AboutDialog(_Dialog):
         """Copia as instruções de instalação para mandar a um colega."""
         self.clipboard_clear()
         self.clipboard_append(install_help())
-        messagebox.showinfo('Second Take', t('about.copied'), parent=self)
+        messagebox.showinfo(APP_NAME, t('about.copied'), parent=self)
 
     def _copy(self):
-        txt = f'Second Take {__version__}\n' + '\n'.join(f'{k}: {v}' for k, v in self._rows)
+        txt = f'{APP_NAME} {__version__}\n' + '\n'.join(f'{k}: {v}' for k, v in self._rows)
         self.clipboard_clear()
         self.clipboard_append(txt)
 
@@ -1096,10 +1100,10 @@ class AdvancedDialog(_Dialog):
 
 def _log_dir() -> str:
     if sys.platform == 'darwin':
-        return os.path.expanduser('~/Library/Logs/Second Take')
+        return os.path.expanduser(f'~/Library/Logs/{APP_NAME}')
     if sys.platform == 'win32':
-        return os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), 'Second Take', 'Logs')
-    return os.path.expanduser('~/.local/state/secondtake')
+        return os.path.join(os.environ.get('LOCALAPPDATA', os.path.expanduser('~')), APP_NAME, 'Logs')
+    return os.path.expanduser('~/.local/state/' + FILE_PREFIX.lower())
 
 
 def main():
@@ -1112,7 +1116,7 @@ def main():
         os.makedirs(_log_dir(), exist_ok=True)
         log = os.path.join(_log_dir(), 'secondtake.log')
         fh = open(log, 'a', encoding='utf-8')
-        fh.write(f'\n--- Second Take {__version__} · {platform.platform()} · Python {platform.python_version()}\n')
+        fh.write(f'\n--- {APP_NAME} {__version__} · {platform.platform()} · Python {platform.python_version()}\n')
         fh.flush()
         faulthandler.enable(fh)          # registra até falhas fatais (segfault) do Tk
     except Exception:
@@ -1129,7 +1133,7 @@ def main():
         try:
             root = tk.Tk()
             root.withdraw()
-            messagebox.showerror('Second Take', f'O Second Take não conseguiu abrir.\n\n{err[-1500:]}\n\nLog: {log}')
+            messagebox.showerror(APP_NAME, f'O {APP_NAME} não conseguiu abrir.\n\n{err[-1500:]}\n\nLog: {log}')
         except Exception:
             pass
         raise
