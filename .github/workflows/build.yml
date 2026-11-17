@@ -1,22 +1,21 @@
 name: build
 
-# A cada push no branch beta: roda os testes, gera o Second Take Beta e publica
-# na pré-release "Beta (branch beta)" (tag móvel `beta-build`), sempre no mesmo link:
-# https://github.com/<dono>/<repo>/releases/tag/beta-build
-# (na main, este mesmo workflow publica a `main-build` da versão estável)
+# A cada push na main: roda os testes, gera o app e o instalador .dmg e publica
+# na pré-release "Última versão (main)" (tag móvel `main-build`), sempre no mesmo link:
+# https://github.com/<dono>/<repo>/releases/tag/main-build
 # Versões oficiais continuam saindo pelas tags v* (workflow release.yml).
 # O job do Windows anexa o Setup.exe e o .zip portátil à mesma pré-release.
 
 on:
   push:
-    branches: [beta]
+    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: beta-build
+  group: main-build
   cancel-in-progress: true
 
 jobs:
@@ -36,20 +35,20 @@ jobs:
           name: SecondTake-dmg-${{ github.sha }}
           path: dist/*.dmg
           retention-days: 14
-      - name: Atualizar a pré-release "Beta (branch beta)"
+      - name: Atualizar a pré-release "Última versão (main)"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION=$(python -c "import secondtake; print(secondtake.__version__)")
           SHORT=${GITHUB_SHA::7}
-          gh release delete beta-build --yes --cleanup-tag 2>/dev/null || true
-          gh release create beta-build dist/*.dmg dist/*.zip \
+          gh release delete main-build --yes --cleanup-tag 2>/dev/null || true
+          gh release create main-build dist/*.dmg dist/*.zip \
             --prerelease --target "$GITHUB_SHA" \
-            --title "Beta (branch beta) · $VERSION · $SHORT" \
-            --notes "Second Take Beta, gerado automaticamente a partir do commit $SHORT ($(date -u '+%Y-%m-%d %H:%M UTC')).
-          Instala ao lado do Second Take normal, sem substituí-lo. Para a versão estável, veja a release Latest.
+            --title "Última versão (main) · $VERSION · $SHORT" \
+            --notes "Gerada automaticamente a partir do commit $SHORT ($(date -u '+%Y-%m-%d %H:%M UTC')).
+          Para versões oficiais, veja as releases v*.
 
-          Second Take Beta, built automatically from commit $SHORT. Installs alongside the regular Second Take. For the stable version, see the Latest release."
+          Built automatically from commit $SHORT. For official versions, see the v* releases."
 
   windows:
     needs: dmg                # anexa à pré-release depois que o job do macOS a recria
@@ -72,12 +71,12 @@ jobs:
         with:
           name: SecondTake-windows-${{ github.sha }}
           path: |
-            dist/SecondTake*-*-Windows-x64-Setup.exe
-            dist/SecondTake*-*-Windows-x64-portatil.zip
+            dist/SecondTake-*-Windows-x64-Setup.exe
+            dist/SecondTake-*-Windows-x64-portatil.zip
           retention-days: 14
-      - name: Anexar à pré-release "Beta (branch beta)"
+      - name: Anexar à pré-release "Última versão (main)"
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload beta-build (Get-ChildItem dist\SecondTake*-*-Windows-*).FullName --clobber
+          gh release upload main-build (Get-ChildItem dist\SecondTake-*-Windows-*).FullName --clobber

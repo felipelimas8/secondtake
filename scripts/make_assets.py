@@ -89,33 +89,6 @@ def icon():
     return out
 
 
-def icon_beta(base):
-    """Variante do Second Take Beta: o mesmo ícone com uma faixa laranja "BETA" no canto."""
-    S = base.size[0]
-    band = Image.new('RGBA', (S, S), (0, 0, 0, 0))
-    d = ImageDraw.Draw(band)
-    h = int(S * 0.11)
-    cx = cy = int(S * 0.765)
-    d.rectangle([-S, cy - h // 2, 2 * S, cy + h // 2], fill=(255, 122, 26, 255))
-    f = font(int(h * 0.62), 'Bold')
-    w = d.textlength('BETA', font=f)
-    d.text((cx - w / 2, cy - h * 0.40), 'BETA', font=f, fill=(255, 255, 255))
-    band = band.rotate(45, center=(cx, cy), resample=Image.BICUBIC)
-    # só dentro do squircle do ícone
-    m, r = 100 * S // 1024, 225 * S // 1024
-    mask = Image.new('L', (S, S), 0)
-    ImageDraw.Draw(mask).rounded_rectangle([m, m, S - m, S - m], r, fill=255)
-    band.putalpha(Image.composite(band.getchannel('A'), Image.new('L', (S, S), 0), mask))
-    out = base.copy()
-    out.alpha_composite(band)
-    out.save(os.path.join(OUT, 'icon_beta_1024.png'))
-    out.resize((256, 256), Image.LANCZOS).save(os.path.join(HERE, '..', 'src', 'secondtake', 'icon_beta.png'))
-    ico_sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
-    out.save(os.path.join(OUT, 'icon_beta.ico'), sizes=ico_sizes)
-    out.save(os.path.join(HERE, '..', 'src', 'secondtake', 'icon_beta.ico'), sizes=ico_sizes)
-    return out
-
-
 def dmg_background(scale):
     """Fundo bilíngue da janela do instalador: ícones no alto, passos em PT e EN embaixo."""
     W, H = 680 * scale, 580 * scale
@@ -178,7 +151,7 @@ def social_preview():
 
 if __name__ == '__main__':
     os.makedirs(OUT, exist_ok=True)
-    icon_beta(icon())
+    icon()
     dmg_background(1)
     dmg_background(2)
     social_preview()
