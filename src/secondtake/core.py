@@ -320,6 +320,55 @@ def _avc_info(stsd: bytes) -> dict:
     return info
 
 
+HEVC_PROFILES = {1: 'Main', 2: 'Main 10', 3: 'Main Still Picture', 4: 'RExt', 9: 'SCC'}
+
+
+def _hevc_info(stsd: bytes) -> dict:
+    """Perfil, nível, amostragem de cor e bit depth do hvcC (ISO/IEC 14496-15, 8.3.3.1).
+    No perfil RExt (4) o nome sai da combinação de chroma e bit depth, como a Sony
+    descreve o XAVC HS: Main 4:2:2 10."""
+    i = stsd.find(b'hvcC')
+    if i < 0 or len(stsd) < i + 4 + 22:
+        return {}
+    a = i + 4
+    prof = stsd[a + 1] & 0x1F
+    level = stsd[a + 12]
+    chroma = stsd[a + 16] & 0x03
+    depth = (stsd[a + 17] & 0x07) + 8
+    ch = {0: '4:0:0', 1: '4:2:0', 2: '4:2:2', 3: '4:4:4'}[chroma]
+    name = HEVC_PROFILES.get(prof, str(prof))
+    if prof == 4:
+        name = f"Main {ch}{'' if depth == 8 else f' {depth}'}" if chroma else f'Monochrome {depth}'
+    lv = level / 30
+    return {'profile': name, 'level': f'{lv:.1f}'.rstrip('0').rstrip('.') if lv % 1 else f'{int(lv)}',
+            'chroma': ch, 'bit_depth': depth}
+
+
+CODEC_LABEL = {'avc1': 'H.264', 'avc3': 'H.264', 'hvc1': 'H.265', 'hev1': 'H.265'}
+
+
+def video_family(m: dict) -> str:
+    """'avc' ou 'hevc' pelos metadados do clipe: o moov manda; sem moov, o conteúdo do mdat
+    (rebuild.sniff_video_family) e, por último, o codec do XML da Sony."""
+    vc = m.get('video_codec', '')
+    if vc in ('hvc1', 'hev1'):
+        return 'hevc'
+    if vc in ('avc1', 'avc3'):
+        return 'avc'
+    if m.get('stream_family'):
+        return m['stream_family']
+    x = str(m.get('xml_codec', '')).upper()
+    if 'HEVC' in x or 'H265' in x:
+        return 'hevc'
+    if 'AVC' in x or 'H264' in x:
+        return 'avc'
+    return ''
+
+
+def is_hevc(c: 'Clip') -> bool:
+    return video_family(c.extra.get('meta') or {}) == 'hevc'
+
+
 def _fps_label(fps: float) -> str:
     for nominal, label in ((23.976, '23.976'), (29.97, '29.97'), (59.94, '59.94'), (119.88, '119.88'),
                            (47.952, '47.952')):
@@ -361,7 +410,7 @@ def read_meta(path: str, moov: bytes | None = None) -> dict:
                 if mdur and mts:
                     meta['fps'] = n * mts / mdur
                     meta['video_bitrate'] = vbytes * 8 / (mdur / mts)
-                meta.update(_avc_info(sd))
+                meta.update(_avc_info(sd) or _hevc_info(sd))
             elif h == b'soun':
                 ch, bits = struct.unpack('>HH', sd[ent + 24:ent + 28])
                 meta.update({'audio_codec': {'twos': 'LPCM', 'sowt': 'LPCM', 'lpcm': 'LPCM',
@@ -390,7 +439,7 @@ def meta_rows(c: 'Clip') -> list[tuple[str, str]]:
     add('meta.lens', m.get('xml_lens'))
     if m.get('width'):
         add('meta.resolution', f"{m['width']} × {m['height']}")
-    codec = ' '.join(x for x in ('H.264' if m.get('video_codec') == 'avc1' else m.get('video_codec'),
+    codec = ' '.join(x for x in (CODEC_LABEL.get(m.get('video_codec'), m.get('video_codec')),
                                  m.get('profile'), m.get('level') and f"L{m['level']}") if x)
     if m.get('chroma'):
         codec += f" · {m['chroma']} {m.get('bit_depth', '')}-bit"
@@ -470,6 +519,14 @@ def _audio_peak_db(path: str, tracks: list[Track], samples: int = 12) -> float |
     return round(20 * math.log10(max(1, peak) / 32768), 1)
 
 
+def _sniff(c: Clip):
+    """Sem índice utilizável, o codec vem do conteúdo (H.264 × H.265), antes de escolher o modo."""
+    from . import rebuild as rb
+    fam = rb.sniff_video_family(c.path)
+    if fam:
+        c.extra.setdefault('meta', {})['stream_family'] = fam
+
+
 def diagnose(path: str) -> Clip:
     c = Clip(path, os.path.getsize(path))
     xml = sony_xml(path)
@@ -488,6 +545,7 @@ def diagnose(path: str) -> Clip:
         if path.lower().endswith('.rsv'):
             c.detail = L('diag.rsv')
         c.extra['meta'] = read_meta(path, b'')
+        _sniff(c)
         return c
     c.moov_pos, moov = m
     c.extra['meta'] = read_meta(path, moov)
@@ -495,10 +553,12 @@ def diagnose(path: str) -> Clip:
         tracks = parse_moov(moov)
     except Exception as e:
         c.status, c.detail = UNKNOWN, L('diag.bad_moov', err=e)
+        _sniff(c)
         return c
     c.extra['tracks'] = ','.join(f'{t.handler}:{t.fmt}' for t in tracks)
     if any(o >= c.moov_pos for t in tracks for o in t.offsets):
         c.status, c.detail = UNKNOWN, L('diag.moov_out')
+        _sniff(c)
         return c
     c.audio_db = _audio_peak_db(path, tracks)
     good_head = head[4:8] == b'ftyp' and head[MDAT_POS + 4:MDAT_POS + 8] == b'mdat'
@@ -556,7 +616,7 @@ def _fps_key(v) -> str:
     return f'{num:.2f}'.rstrip('0').rstrip('.') + ('i' if inter else '')
 
 
-SIG_KEYS = ('camera', 'codec', 'format_fps', 'capture_fps', 'width', 'height', 'audio_ch', 'audio_bits')
+SIG_KEYS = ('vcodec', 'camera', 'codec', 'format_fps', 'capture_fps', 'width', 'height', 'audio_ch', 'audio_bits')
 
 
 def signature(c: Clip) -> dict:
@@ -568,6 +628,7 @@ def signature(c: Clip) -> dict:
     if not xml:                                   # referências rápidas guardam o XML nos atributos
         xml = {k: getattr(c, k) for k in ('camera', 'codec', 'fps') if getattr(c, k, '')}
     sig = {
+        'vcodec': video_family(m),
         'camera': xml.get('camera', '') or c.camera,
         'codec': xml.get('codec', '') or c.codec,
         'format_fps': _fps_key(xml.get('format_fps') or m.get('fps')),
@@ -604,6 +665,8 @@ def _ref_candidates(c: Clip, refs: list[Clip]) -> list[Clip]:
 def plan_rebuild(c: Clip, refs: list[str], data_start: int | None = None):
     """Simula a reconstrução (modo avançado) sem gravar nada."""
     from . import rebuild as rb
+    if is_hevc(c):
+        raise ValueError(L('err.hevc_rebuild'))
     p = rb.plan(c.path, refs, find_moov, data_start)
     c.reference = p.profile.ref_path
     c._plan = p
@@ -635,6 +698,11 @@ def _assign_references(clips: list[Clip], progress=None, extra_refs: list[Clip] 
                 c.extra['mode'] = 'cabecalho'
             else:
                 c.note(L('diag.no_ref'))
+            continue
+        if is_hevc(c):
+            # XAVC HS sem índice: a varredura de blocos e a extração bruta só entendem H.264.
+            # Fica sem referência (não entra no lote) e com o motivo no diagnóstico.
+            c.note(L('diag.hevc_rebuild'))
             continue
         try:
             plan_rebuild(c, [r.path for r in pool[:40]])
@@ -710,6 +778,8 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
     st = os.stat(c.path)                         # datas do original, antes de qualquer leitura
     stem, ext = os.path.splitext(c.name)
     mode = c.extra.get('mode', 'cabecalho' if c.status == HEADER else 'reconstruir')
+    if mode != 'cabecalho' and is_hevc(c):
+        raise ValueError(L('err.hevc_rebuild'))
     if mode == 'extrair':
         from . import rebuild as rb
         prof = None
@@ -943,9 +1013,9 @@ def thumbnails(path: str, fracs=THUMB_FRACS, width: int = THUMB_WIDTH, cancel=No
     """Quadros de prévia (PNG em memória) a 10 %, 50 % e 90 % do clipe.
 
     Não depende do cabeçalho do arquivo: o keyframe mais próximo de cada ponto é lido direto
-    pelas tabelas do moov, recebe o SPS/PPS do avcC e é decodificado pelo ffmpeg via pipe.
-    Por isso funciona também em clipes com cabeçalho danificado. Só H.264 (avc1) por
-    enquanto; retorna [] sem ffmpeg, sem moov ou em outro codec. Itens None = quadro ilegível."""
+    pelas tabelas do moov, recebe os parâmetros do avcC/hvcC e é decodificado pelo ffmpeg via pipe.
+    Por isso funciona também em clipes com cabeçalho danificado. H.264 (avc1)
+    e H.265 (hvc1/hev1, parâmetros do hvcC); retorna [] sem ffmpeg, sem moov ou em outro codec. Itens None = quadro ilegível."""
     from . import rebuild as rb
     ff = ffmpeg_bin()
     m = find_moov(path)
@@ -955,10 +1025,17 @@ def thumbnails(path: str, fracs=THUMB_FRACS, width: int = THUMB_WIDTH, cancel=No
         samples, keys, stsd = video_samples(m[1])
     except Exception:
         return []
-    sps, pps = rb.avcc_params(stsd)
-    if not samples or not keys or not sps:
+    fam = rb.video_family(stsd)
+    if fam == 'hevc':
+        nals = rb.hvcc_params(stsd)
+        demux = 'hevc'
+    else:
+        sps, pps = rb.avcc_params(stsd)
+        nals = sps and sps + pps
+        demux = 'h264'
+    if not samples or not keys or not nals:
         return []
-    params = b''.join(rb.SC + x for x in sps + pps)
+    params = b''.join(rb.SC + x for x in nals)
     out = []
     with open(path, 'rb') as f:
         for fr in fracs:
@@ -966,9 +1043,10 @@ def thumbnails(path: str, fracs=THUMB_FRACS, width: int = THUMB_WIDTH, cancel=No
             k = max((x for x in keys if x <= target), default=keys[0])
             off, ln = samples[k]
             f.seek(off)
-            au = rb._au_to_annexb(f.read(ln), params)
+            au = (params + rb._au_to_annexb(f.read(ln), b'', idr=lambda n: False)) if fam == 'hevc' \
+                else rb._au_to_annexb(f.read(ln), params)
             try:
-                r = run_quiet([ff, '-v', 'error', '-f', 'h264', '-i', '-', '-frames:v', '1',
+                r = run_quiet([ff, '-v', 'error', '-f', demux, '-i', '-', '-frames:v', '1',
                                '-vf', f'scale={width}:-2:flags=bilinear,format=rgb24',
                                '-f', 'image2pipe', '-c:v', 'png', '-'],
                               input=au, capture_output=True, timeout=THUMB_TIMEOUT,

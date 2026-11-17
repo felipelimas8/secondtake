@@ -110,18 +110,25 @@ def _source_samples(mov: str):
 
 
 def make_xavc(path: str, seconds: float = 4.0, seed: int = 1, G: int = 12, gop: int = 24,
-              meta_size: int = 1024, pad: int = 1 << 20, bframes: int = 2) -> dict:
+              meta_size: int = 1024, pad: int = 1 << 20, bframes: int = 2, codec: str = 'h264') -> dict:
     """Cria um clipe sintético XAVC S 23,976p + LPCM 48 kHz estéreo.
+    codec='hevc' gera um XAVC HS de teste (libx265, Main 4:2:2 10, trilha hvc1 + hvcC); o layout
+    dos blocos é o mesmo do XAVC S, porque o da câmera ainda não foi medido num arquivo real.
     Retorna informações úteis aos testes (n_chunks, frames, offsets dos blocos)."""
+    gop_opts = f'keyint={gop}:min-keyint={gop}:scenecut=0:bframes={bframes}:b-adapt=0:open-gop=0'
+    if codec == 'hevc':
+        venc = ['-c:v', 'libx265', '-preset', 'ultrafast', '-pix_fmt', 'yuv422p10le', '-tag:v', 'hvc1',
+                '-x265-params', f'aud=1:{gop_opts}:log-level=error']
+    else:
+        venc = ['-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p',
+                '-x264-params', f'aud=1:{gop_opts}']
     with tempfile.TemporaryDirectory() as td:
         mov = os.path.join(td, 'src.mov')
-        x264 = f'aud=1:keyint={gop}:min-keyint={gop}:scenecut=0:bframes={bframes}:b-adapt=0:open-gop=0'
         subprocess.run([
             'ffmpeg', '-v', 'error', '-y',
             '-f', 'lavfi', '-i', f'testsrc2=size=320x180:rate=24000/1001:duration={seconds}',
             '-f', 'lavfi', '-i', f'sine=frequency={220 + 110 * seed}:sample_rate=48000:duration={seconds}',
-            '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-x264-params', x264,
-            '-c:a', 'pcm_s16be', '-ac', '2', '-f', 'mov', mov], check=True)
+            *venc, '-c:a', 'pcm_s16be', '-ac', '2', '-f', 'mov', mov], check=True)
         src = _source_samples(mov)
     frames, keys, ctts = src['frames'], src['keys'], src['ctts']
     n_chunks = len(frames) // G

@@ -1406,6 +1406,56 @@ def _log_dir() -> str:
     return os.path.expanduser('~/.local/state/secondtake')
 
 
+def _smoke() -> int:
+    """Teste de fumaça do app empacotado (CI, `SECONDTAKE_SMOKE=1`): monta a janela principal
+    sem splash e sem rede, deixa o loop do Tk rodar 1,5 s, confere o essencial e fecha.
+
+    Pega o que os testes do pytest não pegam: dado do CustomTkinter/tkdnd que o PyInstaller
+    não levou, import que só falha congelado, exceção em callback do Tk na abertura.
+    O resultado sai em JSON numa linha, em `SECONDTAKE_SMOKE_OUT` (arquivo) ou no stdout
+    (o .exe "windowed" do Windows não tem stdout). Código de saída 0 = abriu."""
+    import json
+    import traceback
+    os.environ['SECONDTAKE_NO_SPLASH'] = '1'
+    errors: list[str] = []
+    info = {'version': __version__, 'frozen': bool(getattr(sys, 'frozen', False)),
+            'platform': platform.platform(), 'python': platform.python_version()}
+    try:
+        App.check_updates = lambda self, manual: None                    # sem rede no CI
+        App.report_callback_exception = lambda self, *exc: errors.append(
+            ''.join(traceback.format_exception(*exc)))
+        app = App()
+        app.after(1500, app.quit)
+        app.mainloop()
+        app.update_idletasks()
+        info.update(tk=str(app.tk.call('info', 'patchlevel')), customtkinter=ctk.__version__,
+                    dnd=bool(app.dnd), lang=i18n.get_lang(), title=app.title(),
+                    mapped=bool(app.winfo_ismapped()), icon=app_icon(32) is not None,
+                    rows=len(app.tree.get_children()) if hasattr(app, 'tree') else None)
+        app.destroy()
+        if TkinterDnD is not None and not info['dnd']:
+            errors.append('tkdnd não carregou (arrastar e soltar)')
+        if not info['mapped']:
+            errors.append('a janela principal não apareceu')
+        if not info['icon']:
+            errors.append('ícone do app não encontrado no pacote')
+    except BaseException:
+        errors.append(traceback.format_exc())
+    info['errors'] = errors
+    info['ok'] = not errors
+    text = json.dumps(info, ensure_ascii=False)
+    out = os.environ.get('SECONDTAKE_SMOKE_OUT')
+    try:
+        if out:
+            with open(out, 'w', encoding='utf-8') as f:
+                f.write(text + '\n')
+        elif sys.stdout is not None:
+            print(text, flush=True)
+    except OSError:
+        pass
+    return 0 if info['ok'] else 1
+
+
 def main():
     """Abre o app. Se algo falhar na abertura, grava o erro em um log e tenta mostrá-lo numa janela,
     em vez de o app só piscar no Dock e fechar."""
@@ -1421,6 +1471,8 @@ def main():
         faulthandler.enable(fh)          # registra até falhas fatais (segfault) do Tk
     except Exception:
         pass
+    if os.environ.get('SECONDTAKE_SMOKE'):
+        sys.exit(_smoke())
     try:
         App().mainloop()
     except Exception:

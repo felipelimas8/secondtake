@@ -15,6 +15,7 @@ completo. Originais nunca são alterados.
 from __future__ import annotations
 
 import os
+import re
 import struct
 from dataclasses import dataclass
 
@@ -168,6 +169,9 @@ def _load_profile(ref_path: str, find_moov) -> Profile:
         raise ValueError(L('err.ref_tracks'))
     vst = v.find(b'mdia', b'minf', b'stbl')
     ast = a.find(b'mdia', b'minf', b'stbl')
+    if video_family(vst.find(b'stsd').data) == 'hevc':
+        # XAVC HS: a varredura de blocos ainda só entende NAL H.264 (ver hvcc_params)
+        raise ValueError(L('err.hevc_ref'))
     G = _table(vst.find(b'stsc'), 3)[0][1]
     audio_spc = _table(ast.find(b'stsc'), 3)[0][1]
     asd = ast.find(b'stsd').data
@@ -573,15 +577,81 @@ def avcc_params(stsd_data: bytes) -> tuple[list[bytes], list[bytes]]:
 
 SC = b'\x00\x00\x00\x01'
 
+AVC_FORMATS = (b'avc1', b'avc3')
+HEVC_FORMATS = (b'hvc1', b'hev1')     # XAVC HS (H.265)
 
-def _au_to_annexb(au: bytes, params: bytes) -> bytes:
-    out, p, idr = [], 0, False
+
+def video_family(stsd_data: bytes) -> str:
+    """'avc', 'hevc' ou '' a partir do stsd do vídeo (1ª entrada da descrição de amostra)."""
+    fmt = stsd_data[12:16]
+    if fmt in HEVC_FORMATS:
+        return 'hevc'
+    if fmt in AVC_FORMATS:
+        return 'avc'
+    return ''
+
+
+# NAL com prefixo de tamanho de 4 bytes, como no mdat: AUD H.264 (tipo 9) e, no H.265,
+# AUD (35), VPS (32) e SPS (33), cujo cabeçalho de 2 bytes é (tipo << 1, 0x01). Padrões de
+# 6-7 bytes: num XAVC S-I de 600 Mb/s, 32 MB são poucos quadros e não há margem para acaso.
+_AVC_RE = re.compile(rb'\x00\x00\x00[\x02\x03]\x09[\x10\x30\x50\x70\x90\xb0\xd0\xf0]')
+_HEVC_RE = re.compile(rb'\x00\x00\x00[\x03\x04]\x46\x01[\x10\x30\x50]'
+                       rb'|\x00\x00\x00[\x10-\x7f]\x40\x01\x0c'
+                       rb'|\x00\x00\x00[\x20-\xff]\x42\x01\x01')
+
+
+def sniff_video_family(path: str, start: int = 262144, length: int = 32 << 20) -> str:
+    """Codec do vídeo pelo conteúdo do mdat, para clipes sem índice: conta inícios de AU
+    H.264 e H.265 nos primeiros MB de dados. '' se não houver evidência clara."""
+    try:
+        with open(path, 'rb') as f:
+            f.seek(start)
+            buf = f.read(length)
+    except OSError:
+        return ''
+    avc = len(_AVC_RE.findall(buf))
+    hevc = len(_HEVC_RE.findall(buf))
+    if hevc and hevc >= 2 * avc:
+        return 'hevc'
+    if avc and avc >= 2 * hevc:
+        return 'avc'
+    return ''
+
+
+def hvcc_params(stsd_data: bytes) -> list[bytes]:
+    """VPS, SPS, PPS (e SEI de prefixo) do hvcC, na ordem gravada. [] se não houver hvcC."""
+    i = stsd_data.find(b'hvcC')
+    if i < 0:
+        return []
+    p = i + 4 + 22
+    out = []
+    try:
+        n_arrays = stsd_data[p]
+        p += 1
+        for _ in range(n_arrays):
+            n = struct.unpack('>H', stsd_data[p + 1:p + 3])[0]
+            p += 3
+            for _ in range(n):
+                ln = struct.unpack('>H', stsd_data[p:p + 2])[0]
+                nal = stsd_data[p + 2:p + 2 + ln]
+                if len(nal) != ln:
+                    return out
+                out.append(nal)
+                p += 2 + ln
+    except (IndexError, struct.error):
+        pass
+    return out
+
+
+def _au_to_annexb(au: bytes, params: bytes, idr=lambda nal: nal[0] & 0x1F == 5) -> bytes:
+    """AU com prefixo de tamanho -> Annex B; `params` entra antes do 1º NAL em que idr(nal)."""
+    out, p, seen = [], 0, False
     while p + 4 <= len(au):
         n = struct.unpack('>I', au[p:p + 4])[0]
         nal = au[p + 4:p + 4 + n]
-        if nal and nal[0] & 0x1F == 5 and not idr:
+        if nal and idr(nal) and not seen:
             out.append(params)
-            idr = True
+            seen = True
         out.append(SC + nal)
         p += 4 + n
     return b''.join(out)

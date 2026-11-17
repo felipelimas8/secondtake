@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.9.11 — 2026-11-17
+- **XAVC HS (H.265), primeiro passo**: o app reconhece clipes HEVC (`hvc1`/`hev1`) e mostra no Detalhes o perfil, o nível, a amostragem 4:2:2 e o 10-bit (lidos do `hvcC`). A prévia de 3 quadros e a **troca de cabeçalho** (cabeçalho corrompido, índice íntegro) funcionam, com preferência por uma referência também H.265.
+- **XAVC HS sem índice**: a reconstrução e a extração bruta ainda não entendem H.265. Esses clipes aparecem como "XAVC HS (H.265) sem índice: reconstrução ainda não suportada" e ficam fora do lote, em vez de passar pelo leitor H.264. O codec é detectado também pelo conteúdo do arquivo quando o índice e o XML sumiram, e uma referência H.265 nunca é usada para reconstruir um clipe H.264.
+- **Build reproduzível**: dependências do build e dos testes travadas com hash em `requirements-build.txt` (as mesmas versões da 0.9.10: CustomTkinter 6.0.0, PyInstaller 6.22.3, tkinterdnd2 0.7.0). Actions do GitHub fixadas por SHA; só o job que publica tem permissão de escrita.
+- **Teste de fumaça**: antes de publicar, o GitHub abre o app empacotado de verdade no macOS (a partir do `.zip` distribuído) e no Windows (`SECONDTAKE_SMOKE=1`, `scripts/smoke_test.py`).
+- **Release inteira ou nada**: macOS e Windows são gerados em paralelo e a release só é criada quando os dois passam. Antes, uma falha no Windows deixava a release como Latest só com os arquivos do Mac (foi o que aconteceu na 0.9.7).
+- **SHA256SUMS.txt** em cada release e na pré-release da `main`, para conferir os downloads.
+- Empacotamento: o PyInstaller passa a levar `PIL._tkinter_finder` explicitamente (o hook do Pillow o deixava de fora; no Linux o ícone do cabeçalho quebrava a abertura).
+- README atualizado (arquitetura, metadados/timecode/prévia, testes, build).
+
 ## 0.9.10 — 2026-11-17
 - **Tela de apresentação**: ao abrir, aparece uma tela com o ícone, o nome e a versão, nas cores do tema do sistema. Fica pelo menos 1,2 s na tela (sem somar ao tempo de carregamento) e some com um fade curto; um clique nela pula a espera.
 - **Título da janela**: só "Second Take". A versão continua no cabeçalho e no Sobre.

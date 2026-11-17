@@ -14,7 +14,9 @@ APP_NAME="Second Take"
 BUNDLE_ID="br.com.super8.secondtake"
 SIGN_ID="-"   # assinatura ad-hoc
 
-python3 -m pip install -q -e ".[build]"
+# dependências travadas (versões + hashes): o CustomTkinter/PyInstaller não mudam sozinhos
+python3 -m pip install -q --require-hashes -r requirements-build.txt
+python3 -m pip install -q --no-deps -e .
 VERSION=$(python3 -c "import secondtake; print(secondtake.__version__)")
 ARCH=$(uname -m)
 BASENAME="SecondTake-$VERSION-macOS-$ARCH"
@@ -45,6 +47,7 @@ ICON=()
 python3 -m PyInstaller --windowed --noconfirm --clean \
   --name "$APP_NAME" --paths "$ROOT/src" --collect-submodules secondtake \
   --collect-data customtkinter --collect-data secondtake --collect-all tkinterdnd2 \
+  --hidden-import PIL._tkinter_finder \
   --osx-bundle-identifier "$BUNDLE_ID" \
   --workpath "$WORK/pyi-build" --distpath "$WORK/dist" --specpath "$WORK" \
   ${ICON[@]+"${ICON[@]}"} "$ROOT/scripts/secondtake_app.py"

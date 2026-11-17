@@ -1,10 +1,13 @@
 name: build
 
-# A cada push na main: roda os testes, gera o app e o instalador .dmg e publica
-# na pré-release "Última versão (main)" (tag móvel `main-build`), sempre no mesmo link:
+# A cada push na main: testes + app do macOS (.dmg/.zip) e do Windows (Setup.exe/portátil),
+# cada um aberto de verdade por um teste de fumaça, e só então a pré-release móvel
+# "Última versão (main)" (tag `main-build`) é recriada com todos os arquivos + SHA256SUMS.txt:
 # https://github.com/<dono>/<repo>/releases/tag/main-build
+# Se um dos dois sistemas falhar, a pré-release anterior fica como está (nada sai pela metade).
 # Versões oficiais continuam saindo pelas tags v* (workflow release.yml).
-# O job do Windows anexa o Setup.exe e o .zip portátil à mesma pré-release.
+#
+# Dependências: requirements-build.txt (versões + hashes). Actions fixadas por SHA (tag no comentário).
 
 on:
   push:
@@ -12,53 +15,44 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: main-build
   cancel-in-progress: true
 
 jobs:
-  dmg:
+  macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       - run: brew install ffmpeg create-dmg
-      - run: python -m pip install -e ".[dev]" && python -m pytest -q
+      - run: python -m pip install --require-hashes -r requirements-build.txt && python -m pip install --no-deps -e .
+      - run: python -m pytest -q
       - run: scripts/build_macos.sh
-      - run: python scripts/make_samples.py dist
-      - uses: actions/upload-artifact@v4
-        with:
-          name: SecondTake-dmg-${{ github.sha }}
-          path: dist/*.dmg
-          retention-days: 14
-      - name: Atualizar a pré-release "Última versão (main)"
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Teste de fumaça (app do .zip distribuído)
         run: |
-          VERSION=$(python -c "import secondtake; print(secondtake.__version__)")
-          SHORT=${GITHUB_SHA::7}
-          gh release delete main-build --yes --cleanup-tag 2>/dev/null || true
-          gh release create main-build dist/*.dmg dist/*.zip \
-            --prerelease --target "$GITHUB_SHA" \
-            --title "Última versão (main) · $VERSION · $SHORT" \
-            --notes "Gerada automaticamente a partir do commit $SHORT ($(date -u '+%Y-%m-%d %H:%M UTC')).
-          Para versões oficiais, veja as releases v*.
-
-          Built automatically from commit $SHORT. For official versions, see the v* releases."
+          SMOKE=$(mktemp -d)
+          ditto -x -k dist/SecondTake-*-macOS-*.zip "$SMOKE"
+          python scripts/smoke_test.py "$SMOKE/Second Take.app/Contents/MacOS/Second Take"
+      - run: python scripts/make_samples.py dist
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos
+          path: dist/SecondTake-*
+          retention-days: 14
 
   windows:
-    needs: dmg                # anexa à pré-release depois que o job do macOS a recria
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
-      - run: python -m pip install -e ".[dev]"
+      - run: python -m pip install --require-hashes -r requirements-build.txt && python -m pip install --no-deps -e .
       - run: python -m pytest -q
       - name: Inno Setup
         shell: pwsh
@@ -67,16 +61,43 @@ jobs:
       - name: Build
         shell: pwsh
         run: .\scripts\build_windows.ps1
-      - uses: actions/upload-artifact@v4
+      - name: Teste de fumaça (app empacotado)
+        run: python scripts/smoke_test.py "dist\Second Take\Second Take.exe"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: SecondTake-windows-${{ github.sha }}
+          name: windows
           path: |
             dist/SecondTake-*-Windows-x64-Setup.exe
             dist/SecondTake-*-Windows-x64-portatil.zip
           retention-days: 14
-      - name: Anexar à pré-release "Última versão (main)"
-        shell: pwsh
+
+  publish:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS.txt
+        working-directory: dist
+        run: |
+          sha256sum SecondTake-* > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - name: Recriar a pré-release "Última versão (main)"
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload main-build (Get-ChildItem dist\SecondTake-*-Windows-*).FullName --clobber
+          VERSION=$(sed -n "s/^__version__ = '\(.*\)'/\1/p" src/secondtake/__init__.py)
+          SHORT=${GITHUB_SHA::7}
+          gh release delete main-build --yes --cleanup-tag 2>/dev/null || true
+          gh release create main-build dist/SecondTake-* dist/SHA256SUMS.txt \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Última versão (main) · $VERSION · $SHORT" \
+            --notes "Gerada automaticamente a partir do commit $SHORT ($(date -u '+%Y-%m-%d %H:%M UTC')).
+          Para versões oficiais, veja as releases v*. Conferir os downloads: SHA256SUMS.txt.
+
+          Built automatically from commit $SHORT. For official versions, see the v* releases. Verify downloads with SHA256SUMS.txt."
