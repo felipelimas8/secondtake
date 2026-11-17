@@ -151,8 +151,13 @@ class App(ctk.CTk, _DnDBase):
         self.clips: list[core.Clip] = []
         self.q = queue.Queue()
         self.busy = False
+        self.repairing = False
+        self.cancel_evt = threading.Event()
         self.src = tk.StringVar()
         self.dst = tk.StringVar(value=os.path.expanduser('~/Movies/SecondTake'))
+        self.dst_view = tk.StringVar()             # o que o rodapé mostra (pasta ou "pasta de cada clipe")
+        self.beside = tk.BooleanVar(value=bool(i18n.load_config().get('save_beside', False)))
+        self.dst.trace_add('write', lambda *_: self._sync_dst())
         self.only_bad = False
         self.do_verify = tk.BooleanVar(value=bool(core.ffmpeg_bin('ffprobe')))
         self.status_text = L('app.ready')
@@ -330,25 +335,31 @@ class App(ctk.CTk, _DnDBase):
         foot.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(foot, text=t('app.output'), font=(FONT, 12), text_color=PAL['muted']).grid(
             row=0, column=0, padx=(20, 8), pady=(12, 2), sticky='w')
-        self.dst_lbl = ctk.CTkLabel(foot, textvariable=self.dst, font=(MONO, 12), text_color=PAL['text'],
+        self.dst_lbl = ctk.CTkLabel(foot, textvariable=self.dst_view, font=(MONO, 12), text_color=PAL['text'],
                                     anchor='w', cursor='hand2')
         self.dst_lbl.grid(row=0, column=1, sticky='w', pady=(12, 2))
         self.dst_lbl.bind('<Button-1>', lambda e: self._pick_dst())
-        ctk.CTkButton(foot, text=t('app.change'), width=70, height=26, font=(FONT, 12), command=self._pick_dst,
-                      fg_color='transparent', text_color=PAL['accent'], hover_color=PAL['card2']).grid(
-            row=0, column=2, sticky='w', pady=(12, 2))
+        self.btn_change = ctk.CTkButton(foot, text=t('app.change'), width=70, height=26, font=(FONT, 12),
+                                        command=self._pick_dst, fg_color='transparent', text_color=PAL['accent'],
+                                        hover_color=PAL['card2'], text_color_disabled=PAL['muted'])
+        self.btn_change.grid(row=0, column=2, sticky='w', pady=(12, 2))
         ctk.CTkSwitch(foot, text=t('app.verify_switch'), variable=self.do_verify, font=(FONT, 12),
                       text_color=PAL['text']).grid(row=0, column=3, padx=12, pady=(12, 2))
+        # destino: logo abaixo da pasta de saída, que é o que ela muda
+        ctk.CTkSwitch(foot, text=t('app.beside_switch'), variable=self.beside, font=(FONT, 12),
+                      text_color=PAL['text'], command=self._toggle_beside).grid(
+            row=1, column=1, columnspan=3, sticky='w', pady=(2, 4))
+        self._sync_dst()
 
         self.status = ctk.CTkLabel(foot, text=str(self.status_text), font=(FONT, 12), text_color=PAL['muted'],
                                    anchor='w')
-        self.status.grid(row=1, column=0, columnspan=4, sticky='ew', padx=20, pady=(0, 2))
+        self.status.grid(row=2, column=0, columnspan=4, sticky='ew', padx=20, pady=(0, 2))
         self.prog = ctk.CTkProgressBar(foot, height=6)
         self.prog.set(0)
-        self.prog.grid(row=2, column=0, columnspan=4, sticky='ew', padx=20, pady=(0, 14))
+        self.prog.grid(row=3, column=0, columnspan=4, sticky='ew', padx=20, pady=(0, 14))
 
         acts = ctk.CTkFrame(foot, fg_color='transparent')
-        acts.grid(row=0, column=4, rowspan=3, padx=(8, 20), pady=12, sticky='e')
+        acts.grid(row=0, column=4, rowspan=4, padx=(8, 20), pady=12, sticky='e')
         sec = secondary(height=36, font=f)
         self.btn_open = ctk.CTkButton(acts, text=t('app.open_out'), width=110, command=self._open_out, **sec)
         self.btn_open.pack(side='left', padx=4)
@@ -575,13 +586,40 @@ class App(ctk.CTk, _DnDBase):
         AboutDialog(self)
 
     # ------------------------------------------------------------ helpers
+    def _sync_dst(self):
+        """Rodapé: mostra a pasta de saída ou, com "Salvar junto dos originais", o destino por clipe."""
+        beside = self.beside.get()
+        self.dst_view.set(t('app.out_beside') if beside else self.dst.get())
+        if hasattr(self, 'btn_change'):
+            self.btn_change.configure(state='disabled' if beside else 'normal')
+            self.dst_lbl.configure(cursor='arrow' if beside else 'hand2')
+
+    def _toggle_beside(self):
+        i18n.save_config(save_beside=bool(self.beside.get()))
+        self._sync_dst()
+
     def _pick_dst(self):
+        if self.beside.get():
+            return
         d = filedialog.askdirectory(title=t('app.pick_out'), initialdir=self.dst.get())
         if d:
             self.dst.set(d)
 
     def _open_out(self):
+        if self.beside.get():
+            # a subpasta Second Take do último clipe reparado, ou da pasta analisada
+            done = [c for c in self.clips if c.output]
+            cands = [os.path.dirname(done[-1].output)] if done else []
+            if self.src.get():
+                cands += [os.path.join(self.src.get(), core.SAME_FOLDER_DIR), self.src.get()]
+            d = next((x for x in cands if os.path.isdir(x)), None)
+            if d:
+                open_folder(d)
+            return
         d = self.dst.get()
+        sub = os.path.join(d, core.SAME_FOLDER_DIR)
+        if self.src.get() and core.same_dir(d, self.src.get()) and os.path.isdir(sub):
+            d = sub                              # saída = origem: os recuperados estão na subpasta
         os.makedirs(d, exist_ok=True)
         open_folder(d)
 
@@ -600,7 +638,14 @@ class App(ctk.CTk, _DnDBase):
         n = len(self._todo()) if self.clips else 0
         busy = self.busy
         label = t('app.repair_n' if n == 1 else 'app.repair_n_pl', n=n) if n else t('app.repair')
-        self.btn_fix.configure(text=label, state='normal' if n and not busy else 'disabled')
+        if self.repairing:
+            # durante o reparo, a ação principal vira Cancelar (continua sendo o único botão azul)
+            stopping = self.cancel_evt.is_set()
+            self.btn_fix.configure(text=t('app.cancel'), command=self.cancel,
+                                   state='disabled' if stopping else 'normal')
+        else:
+            self.btn_fix.configure(text=label, command=self.repair,
+                                   state='normal' if n and not busy else 'disabled')
         self.btn_adv.configure(state='normal' if len(self._selected()) == 1 and not busy else 'disabled')
         self.btn_report.configure(state='normal' if self.clips and not busy else 'disabled')
         for b in (self.btn_scan, self.btn_files):
@@ -706,45 +751,112 @@ class App(ctk.CTk, _DnDBase):
         todo = self._todo()
         if not todo:
             return
+        beside = self.beside.get()
         out = self.dst.get()
-        if self.src.get() and os.path.abspath(out).startswith(os.path.abspath(self.src.get()) + os.sep):
-            if not messagebox.askyesno('Second Take', t('app.out_inside')):
-                return
         total = sum(c.size for c in todo)
-        try:
-            os.makedirs(out, exist_ok=True)
-            free = free_space(out)
-        except OSError as e:
-            messagebox.showerror('Second Take', t('app.cant_write', path=out, err=e))
+        if beside:
+            # cada clipe vai para <pasta dele>/Second Take: confere o espaço de cada disco
+            per_disk: dict = {}
+            try:
+                for d, group in core.group_by_folder(todo).items():
+                    dev = os.stat(d).st_dev
+                    need_d, _ = per_disk.get(dev, (0, d))
+                    per_disk[dev] = (need_d + core.space_needed(group), d)
+                short = [(need_d, free_space(d)) for need_d, d in per_disk.values() if free_space(d) < need_d]
+            except OSError as e:
+                messagebox.showerror('Second Take', t('app.cant_write', path=t('app.out_beside'), err=e))
+                return
+            if short:
+                need_d, free = short[0]
+                messagebox.showerror('Second Take', t('app.no_space', need=human(need_d), free=human(free)))
+                return
+            where = t('app.out_beside')
+        else:
+            src_dirs = {os.path.dirname(os.path.abspath(c.path)) for c in todo}
+            if self.src.get():
+                src_dirs.add(self.src.get())
+            # saída = origem vai sozinha para a subpasta Second Take; subpasta da origem: perguntar
+            if core.out_inside_source(out, src_dirs):
+                if not messagebox.askyesno('Second Take', t('app.out_inside')):
+                    return
+            need = core.space_needed(todo)          # extração bruta ocupa ~3x; os demais modos ~1x
+            try:
+                os.makedirs(out, exist_ok=True)
+                free = free_space(out)
+            except OSError as e:
+                messagebox.showerror('Second Take', t('app.cant_write', path=out, err=e))
+                return
+            if free < need:
+                messagebox.showerror('Second Take', t('app.no_space', need=human(need), free=human(free)))
+                return
+            where = out
+        if not messagebox.askyesno('Second Take', t('app.confirm', n=len(todo), size=human(total), path=where)):
             return
-        if free < total * 1.05:
-            messagebox.showerror('Second Take', t('app.no_space', need=human(total), free=human(free)))
-            return
-        if not messagebox.askyesno('Second Take', t('app.confirm', n=len(todo), size=human(total), path=out)):
-            return
+        self.cancel_evt.clear()
+        self.repairing = True
         self._set_busy(True)
         verify = self.do_verify.get()
         report = t('csv.report_name')
+        cancel = self.cancel_evt
 
         def work():
             done = 0
+            n_done = 0
             for c in todo:
+                if cancel.is_set():
+                    break
+
+                def progress(b, n, base=done):
+                    if cancel.is_set():
+                        raise core.Cancelled()      # sai do meio da escrita; o .part é apagado
+                    self.q.put(('fix', base + b, total))
+
                 try:
                     self.q.put(('fix_start', c.name))
-                    core.repair(c, out, lambda b, n, base=done: self.q.put(('fix', base + b, total)))
+                    dest = os.path.dirname(os.path.abspath(c.path)) if beside else out
+                    core.repair(c, dest, progress)
+                    n_done += 1
                     if verify:
                         self.q.put(('verify', c.name))
-                        core.verify(c)
+                        core.verify(c, cancel=cancel)
+                except core.Cancelled:
+                    c.verify = L('verify.cancelled') if not c.output else c.verify
                 except Exception as e:
                     c.verify = L('verify.error', err=msg(e))
                 done += c.size
                 self.q.put(('fix_one', c))
-            try:
-                core.write_report(self.clips, os.path.join(out, report))
-            except Exception:
-                pass
-            self.q.put(('fix_done', len(todo), out, report))
+            if beside:
+                # um relatório em cada <pasta>/Second Take, com os clipes daquela pasta
+                folders = core.group_by_folder(todo)
+                for d in folders:
+                    group = [c for c in self.clips if os.path.dirname(os.path.abspath(c.path)) == d]
+                    try:
+                        rdir = os.path.join(d, core.SAME_FOLDER_DIR)
+                        os.makedirs(rdir, exist_ok=True)
+                        core.write_report(group, os.path.join(rdir, report))
+                    except Exception:
+                        pass
+                shown = os.path.join(next(iter(folders)), core.SAME_FOLDER_DIR) if len(folders) == 1 \
+                    else t('app.out_beside')
+            else:
+                shown = core.report_dir(out, todo)   # saída = origem: relatório na subpasta Second Take
+                try:
+                    os.makedirs(shown, exist_ok=True)
+                    core.write_report(self.clips, os.path.join(shown, report))
+                except Exception:
+                    pass
+            stopped = cancel.is_set()
+            self.q.put(('fix_done', n_done if stopped else len(todo), shown, report, len(todo) if stopped else None))
         threading.Thread(target=work, daemon=True).start()
+
+    def cancel(self):
+        """Pede o fim do lote: o clipe em andamento é interrompido e descartado; os já
+        reparados ficam, e o relatório é gravado com o que foi feito."""
+        if not self.repairing or self.cancel_evt.is_set():
+            return
+        self.cancel_evt.set()
+        self._set_status(L('app.cancelling'))
+        self._update_actions()
 
     def advanced(self):
         sel = self._selected()
@@ -803,8 +915,13 @@ class App(ctk.CTk, _DnDBase):
                     if self.tree.exists(i):
                         self.tree.item(i, values=self._row(c), tags=(kind(c),))
                 elif k == 'fix_done':
-                    self._set_status(L('app.done_fix', n=m[1], report=m[3], path=m[2]))
+                    if m[4] is not None:
+                        self._set_status(L('app.cancelled', n=m[1], total=m[4], report=m[3], path=m[2]))
+                    else:
+                        self._set_status(L('app.done_fix', n=m[1], report=m[3], path=m[2]))
                     self.prog.set(1)
+                    self.repairing = False
+                    self.cancel_evt.clear()
                     self._set_busy(False)
                 elif k == 'update':
                     _, info, manual, err = m

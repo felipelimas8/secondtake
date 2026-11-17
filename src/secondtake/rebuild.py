@@ -19,6 +19,7 @@ import struct
 from dataclasses import dataclass
 
 from .i18n import L, msg
+from .safeio import atomic_write, fsync_path, part_path, unique_stem
 
 CONTAINERS = {b'moov', b'trak', b'edts', b'mdia', b'minf', b'stbl', b'dinf'}
 
@@ -128,7 +129,34 @@ def _expand(entries):
     return out
 
 
+_PROFILE_CACHE: dict[tuple, 'Profile'] = {}
+_PROFILE_CACHE_MAX = 64
+
+
 def load_profile(ref_path: str, find_moov) -> Profile:
+    """Perfil de um clipe de referência, com cache por (caminho real, tamanho, data de
+    modificação): numa pasta grande a mesma referência é testada para vários clipes.
+    O Profile não é alterado depois de criado (build_moov copia o moov), então é seguro reusar."""
+    try:
+        st = os.stat(ref_path)
+        key = (os.path.realpath(ref_path), st.st_size, st.st_mtime_ns, getattr(find_moov, '__name__', ''))
+    except OSError:
+        key = None
+    if key is not None and key in _PROFILE_CACHE:
+        return _PROFILE_CACHE[key]
+    prof = _load_profile(ref_path, find_moov)
+    if key is not None:
+        if len(_PROFILE_CACHE) >= _PROFILE_CACHE_MAX:
+            _PROFILE_CACHE.pop(next(iter(_PROFILE_CACHE)))
+        _PROFILE_CACHE[key] = prof
+    return prof
+
+
+def clear_profile_cache():
+    _PROFILE_CACHE.clear()
+
+
+def _load_profile(ref_path: str, find_moov) -> Profile:
     pos, raw = find_moov(ref_path)
     moov = Box.parse(raw)[0]
     traks = {}
@@ -481,7 +509,7 @@ def write(path: str, p: Plan, dst: str, chunk_cb=None) -> str:
     moov = build_moov(prof, p.chunks)
     total = p.data_end - p.data_start
     copied = 0
-    with open(path, 'rb') as src, open(dst, 'wb') as out:
+    with open(path, 'rb') as src, atomic_write(dst) as out:
         out.write(hdr)
         src.seek(p.data_start)
         left = total
@@ -555,7 +583,9 @@ def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
     válidos e recupera só o vídeo."""
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(path))[0]
-    h264 = os.path.join(out_dir, f'{stem}_EXTRAIDO.h264')
+    # um só número para o trio .h264/.wav/.MP4 (C0001_EXTRAIDO_2.*), sem sobrescrever nada
+    base = unique_stem(out_dir, f'{stem}_EXTRAIDO', ['.h264', '.wav', '.MP4'])
+    h264 = base + '.h264'
     prof = plan_.profile if plan_ else profile
     params = b''
     if prof:
@@ -564,11 +594,11 @@ def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
     res = {'h264': h264, 'wav': None, 'mov': None, 'frames': 0, 'audio_s': 0.0}
     samples: list[tuple[int, int, bool]] = []
     size = os.path.getsize(path)
-    with open(path, 'rb') as f, open(h264, 'wb') as out:
+    with open(path, 'rb') as f, atomic_write(h264) as out:
         if params:
             out.write(params)
         if plan_:
-            wav = os.path.join(out_dir, f'{stem}_EXTRAIDO.wav')
+            wav = base + '.wav'
             ch, bits = 2, 16
             asd = None
             for t in prof.moov.all(b'trak'):
@@ -578,7 +608,7 @@ def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
                 ch, bits = struct.unpack('>HH', asd[8 + 24:8 + 28])
             fmt = asd[12:16] if asd else b'twos'
             total = len(plan_.chunks) * prof.audio_chunk
-            with open(wav, 'wb') as w:
+            with atomic_write(wav) as w:
                 w.write(_wav_header(total, prof.a_ts, ch, bits))
                 for i, c in enumerate(plan_.chunks):
                     p = c.video_off
@@ -643,10 +673,10 @@ def extract_raw(path: str, out_dir: str, plan_: Plan | None = None,
         os.remove(h264)
         res['h264'] = None
         return res
-    mov = os.path.join(out_dir, f'{stem}_EXTRAIDO.MP4')
+    mov = base + '.MP4'
     if plan_ is not None:
         # layout conhecido: monta o MP4 completo e copia só vídeo+áudio para um MP4 limpo
-        tmp = os.path.join(out_dir, f'.{stem}_tmp.MP4')
+        tmp = os.path.join(out_dir, f'.{os.path.basename(base)}_tmp.MP4')
         try:
             write(path, plan_, tmp)
             if _ffmpeg_copy(tmp, mov):
@@ -671,10 +701,25 @@ def _ffmpeg_copy(src: str, dst: str) -> bool:
     if not ff:
         return False
     import subprocess
+    from .core import ffmpeg_timeout
     kw = {'creationflags': 0x08000000} if sys.platform == 'win32' else {}  # sem janela de console
-    r = subprocess.run([ff, '-v', 'error', '-y', '-i', src, '-map', '0:v:0', '-map', '0:a?',
-                        '-c', 'copy', dst], capture_output=True, **kw)
-    return r.returncode == 0
+    tmp = part_path(dst)
+    ok = False
+    try:
+        # grava no .part (com -f mp4, já que a extensão .part não diz o formato) e só renomeia no fim
+        r = subprocess.run([ff, '-v', 'error', '-y', '-i', src, '-map', '0:v:0', '-map', '0:a?',
+                            '-c', 'copy', '-f', 'mp4', tmp], capture_output=True,
+                           timeout=ffmpeg_timeout(os.path.getsize(src)), **kw)
+        if r.returncode == 0 and os.path.exists(tmp):
+            fsync_path(tmp)
+            os.replace(tmp, dst)
+            ok = True
+    except (subprocess.TimeoutExpired, OSError):
+        ok = False
+    finally:
+        if not ok and os.path.exists(tmp):
+            os.remove(tmp)
+    return ok
 
 
 def _has_idr(au: bytes) -> bool:
@@ -738,7 +783,7 @@ def write_video_mp4(path: str, samples: list[tuple[int, int, bool]], prof: Profi
         r = _rle(ctts)
         e[b'ctts'] = _full(0, struct.pack('>I', len(r)) + b''.join(struct.pack('>II', a, b) for a, b in r))
     _stbl_tables(t.find(b'mdia', b'minf', b'stbl'), e)
-    with open(path, 'rb') as src, open(dst, 'wb') as out:
+    with open(path, 'rb') as src, atomic_write(dst) as out:
         out.write(ftyp)
         out.write(struct.pack('>I4sQ', 1, b'mdat', 16 + p - data_off))
         for off, ln, _ in samples:

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.7 — 2026-11-17
+- **Sem arquivo cortado com nome de pronto**: o resultado é gravado primeiro num arquivo oculto `.part` e só recebe o nome final (`_REPARADO`, `_RECONSTRUIDO`, `_EXTRAIDO`) depois de gravado por inteiro no disco. Se o disco encher ou o SSD desconectar no meio, o `.part` é apagado e nada fica com cara de concluído.
+- **Nada é sobrescrito**: reparar de novo na mesma pasta de saída cria `_2`, `_3`… em vez de apagar o resultado anterior. O XML de câmera e os arquivos da extração (`.h264`, `.wav`, `.MP4`) recebem o mesmo número do clipe.
+- **Salvar junto dos originais**: nova chave no rodapé, logo abaixo da pasta de saída. Ligada, cada recuperado vai para a subpasta **Second Take** dentro da pasta do próprio clipe (com um relatório em cada uma), mesmo analisando arquivos de cartões diferentes. A escolha fica salva. Na linha de comando: `--beside` no lugar de `-o`.
+- **Nunca ao lado do original**: se a pasta de saída escolhida for a própria pasta dos clipes, o app também grava na subpasta **Second Take**. Ao analisar a pasta de novo, essa subpasta é ignorada.
+- **Espaço livre conferido por modo**: a extração bruta passa a exigir cerca de 3× o tamanho do clipe (antes, 1,05×, o que podia acabar com o disco cheio no meio).
+- **Verificação não trava mais**: o ffprobe e o ffmpeg têm limite de tempo proporcional ao tamanho do arquivo. Se o ffprobe não responder, a verificação é cancelada com um aviso e o arquivo recuperado continua salvo.
+- **Cancelar**: durante o reparo, o botão Reparar vira **Cancelar**. O clipe em andamento é interrompido e descartado (inclusive a verificação com ffprobe); os já reparados ficam, e o relatório é gravado com o que foi feito.
+- **Saída dentro da origem**: a checagem passou a comparar os caminhos reais (atalhos, maiúsculas/minúsculas, `/CLIP` × `/CLIPS`). A linha de comando também avisa.
+- **Análise mais rápida em pastas grandes**: o índice (`moov`) é procurado primeiro só no último 1 MB do arquivo (antes, sempre 16 MB), e o clipe de referência é lido uma vez só, mesmo quando serve a vários clipes.
+- **Segurança**: o relatório CSV neutraliza nomes de arquivo que o Excel/Numbers leriam como fórmula (`=`, `+`, `-`, `@`); o `config.json` é gravado de forma atômica e protegido contra gravações simultâneas; o XML da câmera é lido com `defusedxml` (nova dependência), que recusa entidades maliciosas.
+- **Mac**: os avisos de acesso a cartões/SSDs externos, volumes de rede e às pastas Mesa, Documentos e Transferências passam a explicar, em português e inglês, por que o app precisa do acesso.
+
 ## 0.9.6 — 2026-11-16
 - Mac: o item **Sobre o Second Take** aparece sempre no menu do app, qualquer que seja a versão do Python/Tk usada no build (na 0.9.5 ele ainda faltava nos builds com Tk 8.6).
 

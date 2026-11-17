@@ -16,6 +16,7 @@ import locale
 import os
 import subprocess
 import sys
+import threading
 
 LANGS = ('pt', 'en')
 LANG_NAMES = {'pt': 'Português', 'en': 'English'}
@@ -100,6 +101,9 @@ CATALOG: dict[str, tuple[str, str]] = {
     'verify.extracted_noaudio': (', sem áudio', ', no audio'),
     'verify.nothing': ('nenhum quadro H.264 válido encontrado — sem recuperação possível',
                        'no valid H.264 frames found — nothing recoverable'),
+    'verify.timeout': ('verificação cancelada: o ffprobe passou de {s} s sem responder (arquivo salvo, confira num player)',
+                       'verification cancelled: ffprobe took over {s} s without answering (file saved, check it in a player)'),
+    'verify.cancelled': ('cancelado: nada foi gravado para este clipe', 'cancelled: nothing was written for this clip'),
     'verify.error': ('ERRO: {err}', 'ERROR: {err}'),
 
     # ---- relatório CSV
@@ -158,6 +162,12 @@ CATALOG: dict[str, tuple[str, str]] = {
     'cli.targets': ('uma pasta, ou um ou mais arquivos', 'a folder, or one or more files'),
     'cli.csv': ('salva o diagnóstico em CSV', 'save the diagnosis as CSV'),
     'cli.output': ('pasta de saída', 'output folder'),
+    'cli.beside': ('grava cada recuperado em <pasta do clipe>/Second Take (em vez de -o)',
+                   "write each recovered file to <clip folder>/Second Take (instead of -o)"),
+    'cli.out_inside': ('aviso: a pasta de saída está dentro da pasta de origem ({path})',
+                       'warning: the output folder is inside the source folder ({path})'),
+    'cli.out_same': ('saída = pasta de origem: os recuperados vão para a subpasta "Second Take"',
+                     'output = source folder: recovered files go to the "Second Take" subfolder'),
     'cli.verify': ('confere os reparados com ffprobe', 'check repaired files with ffprobe'),
     'cli.mode': ('força um modo de reparo (padrão: automático)', 'force a repair mode (default: automatic)'),
     'cli.ref': ('clipe de referência manual', 'manual reference clip'),
@@ -198,6 +208,13 @@ CATALOG: dict[str, tuple[str, str]] = {
     'app.output': ('Saída', 'Output'),
     'app.change': ('Alterar', 'Change'),
     'app.verify_switch': ('Verificar com ffprobe', 'Verify with ffprobe'),
+    'app.cancel': ('Cancelar', 'Cancel'),
+    'app.cancelling': ('Cancelando… o clipe em andamento será descartado',
+                       'Cancelling… the clip in progress will be discarded'),
+    'app.cancelled': ('Cancelado: {n} de {total} clipe(s) processado(s) · {report} gravado em {path}',
+                      'Cancelled: {n} of {total} clip(s) processed · {report} written to {path}'),
+    'app.beside_switch': ('Salvar junto dos originais', 'Save next to originals'),
+    'app.out_beside': ('Pasta de cada clipe › Second Take', "Each clip's folder › Second Take"),
     'app.ready': ('Pronto.', 'Ready.'),
     'app.open_out': ('Abrir saída', 'Open output'),
     'app.export': ('Exportar CSV', 'Export CSV'),
@@ -439,23 +456,39 @@ def _config_path() -> str:
     return os.path.join(base, 'config.json')
 
 
+_CONFIG_LOCK = threading.RLock()     # a thread do updater e a interface gravam o mesmo arquivo
+
+
 def load_config() -> dict:
-    try:
-        with open(_config_path(), encoding='utf-8') as f:
-            return json.load(f)
-    except (OSError, ValueError):
-        return {}
+    with _CONFIG_LOCK:
+        try:
+            with open(_config_path(), encoding='utf-8') as f:
+                cfg = json.load(f)
+            return cfg if isinstance(cfg, dict) else {}
+        except (OSError, ValueError):
+            return {}
 
 
 def save_config(**values):
-    cfg = load_config()
-    cfg.update(values)
-    try:
-        os.makedirs(os.path.dirname(_config_path()), exist_ok=True)
-        with open(_config_path(), 'w', encoding='utf-8') as f:
-            json.dump(cfg, f, ensure_ascii=False, indent=2)
-    except OSError:
-        pass
+    """Ler-mesclar-gravar sob trava, gravando num .tmp e trocando com os.replace:
+    um app fechado no meio da gravação nunca deixa o config.json pela metade."""
+    with _CONFIG_LOCK:
+        cfg = load_config()
+        cfg.update(values)
+        path = _config_path()
+        tmp = f'{path}.{os.getpid()}.{threading.get_ident()}.tmp'
+        try:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 def system_lang() -> str:

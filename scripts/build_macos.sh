@@ -42,6 +42,27 @@ PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :NSHumanReadableCopyright string 'Copyright © 2026 Super8 Produtora · GPL v3'" "$PLIST" 2>/dev/null \
   || /usr/libexec/PlistBuddy -c "Set :NSHumanReadableCopyright 'Copyright © 2026 Super8 Produtora · GPL v3'" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :LSApplicationCategoryType string public.app-category.video" "$PLIST" 2>/dev/null || true
+# avisos de privacidade do macOS (TCC): o texto que aparece quando o app lê um cartão/SSD externo,
+# um volume de rede ou as pastas Mesa/Documentos/Transferências. Base em inglês + traduções.
+PRIV_KEYS="NSRemovableVolumesUsageDescription NSNetworkVolumesUsageDescription NSDesktopFolderUsageDescription NSDocumentsFolderUsageDescription NSDownloadsFolderUsageDescription"
+PRIV_EN="Second Take reads camera clips in this location to diagnose them and saves the recovered copies. Originals are never changed."
+PRIV_PT="O Second Take lê os clipes de câmera neste local para diagnosticá-los e grava as cópias recuperadas. Os originais nunca são alterados."
+RES="$APP/Contents/Resources"
+mkdir -p "$RES/en.lproj" "$RES/pt-BR.lproj"
+: > "$RES/en.lproj/InfoPlist.strings"
+: > "$RES/pt-BR.lproj/InfoPlist.strings"
+for KEY in $PRIV_KEYS; do
+  /usr/libexec/PlistBuddy -c "Delete :$KEY" "$PLIST" 2>/dev/null || true
+  /usr/libexec/PlistBuddy -c "Add :$KEY string '$PRIV_EN'" "$PLIST"
+  printf '"%s" = "%s";\n' "$KEY" "$PRIV_EN" >> "$RES/en.lproj/InfoPlist.strings"
+  printf '"%s" = "%s";\n' "$KEY" "$PRIV_PT" >> "$RES/pt-BR.lproj/InfoPlist.strings"
+done
+/usr/libexec/PlistBuddy -c "Delete :CFBundleLocalizations" "$PLIST" 2>/dev/null || true
+/usr/libexec/PlistBuddy -c "Add :CFBundleLocalizations array" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFBundleLocalizations:0 string en" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFBundleLocalizations:1 string pt-BR" "$PLIST"
+plutil -lint "$PLIST" "$RES/en.lproj/InfoPlist.strings" "$RES/pt-BR.lproj/InfoPlist.strings" >/dev/null
+
 xattr -cr "$APP"
 codesign -s - --force --deep "$APP"
 

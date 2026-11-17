@@ -39,7 +39,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument('--csv', help=t('cli.csv'))
     r = sub.add_parser('repair', help=t('cli.repair'))
     r.add_argument('targets', nargs='+', help=t('cli.targets'))
-    r.add_argument('-o', '--output', required=True, help=t('cli.output'))
+    dest = r.add_mutually_exclusive_group(required=True)
+    dest.add_argument('-o', '--output', help=t('cli.output'))
+    dest.add_argument('--beside', action='store_true', help=t('cli.beside'))
     r.add_argument('--verify', action='store_true', help=t('cli.verify'))
     r.add_argument('--mode', choices=['auto', 'cabecalho', 'reconstruir', 'extrair'], default='auto',
                    help=t('cli.mode'))
@@ -62,6 +64,12 @@ def main(argv: list[str] | None = None) -> int:
             print(t('cli.report', path=a.csv))
         return 0 if not bad else 2
 
+    if not a.beside:
+        src_dirs = sorted({os.path.dirname(os.path.abspath(c.path)) for c in clips})
+        if any(core.same_dir(a.output, d) for d in src_dirs):
+            print(t('cli.out_same'), file=sys.stderr)
+        if core.out_inside_source(a.output, src_dirs):
+            print(t('cli.out_inside', path=a.output), file=sys.stderr)
     failures = 0
     for c in clips:
         if c.status not in core.REPAIRABLE:
@@ -93,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
             mode = c.extra.get('mode')
             print(t('cli.repairing', name=c.name, mode=t(f'mode.{mode}') if mode else '?',
                     ref=os.path.basename(c.reference)), flush=True)
-            core.repair(c, a.output)
+            core.repair(c, os.path.dirname(os.path.abspath(c.path)) if a.beside else a.output)
             if a.verify:
                 print('   ', core.verify(c), flush=True)
             elif c.verify:
@@ -102,10 +110,15 @@ def main(argv: list[str] | None = None) -> int:
             failures += 1
             c.verify = core.L('verify.error', err=msg(e))
             print('   ' + str(c.verify), file=sys.stderr)
-    os.makedirs(a.output, exist_ok=True)
-    rep = os.path.join(a.output, t('csv.report_name'))
-    core.write_report(clips, rep)
-    print(t('cli.report', path=rep))
+    if a.beside:
+        reports = [(core.beside_dir(g[0].path), g) for g in core.group_by_folder(clips).values()]
+    else:
+        reports = [(core.report_dir(a.output, clips), clips)]
+    for rdir, group in reports:
+        os.makedirs(rdir, exist_ok=True)
+        rep = os.path.join(rdir, t('csv.report_name'))
+        core.write_report(group, rep)
+        print(t('cli.report', path=rep))
     return 1 if failures else 0
 
 

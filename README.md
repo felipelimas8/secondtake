@@ -58,12 +58,14 @@ Para experimentar sem material real, baixe `SecondTake-amostras-teste.zip` na p�
 1. **Analisar**: escolhe uma pasta de brutas e examina todos os clipes. **Analisar arquivos…** examina só os clipes escolhidos e busca referências na mesma pasta.
 2. Os arquivos reparáveis já vêm selecionados. Clique em **Reparar selecionados**.
 3. **Avançado…** abre os controles manuais de um arquivo: modo, referência, offset e **Simular**.
+4. **Salvar junto dos originais** (chave no rodapé): grava cada recuperado na subpasta `Second Take` dentro da pasta do próprio clipe. O app nunca grava ao lado do original.
 
 ### Linha de comando
 ```bash
 secondtake scan  /Volumes/CARTAO/PRIVATE/M4ROOT/CLIP
 secondtake repair C0042.MP4 C0043.MP4 -o ~/Movies/SecondTake --verify
 secondtake repair C0042.MP4 -o saida --mode reconstruir --ref C0041.MP4
+secondtake repair /Volumes/CARTAO/PRIVATE/M4ROOT/CLIP --beside
 ```
 
 **Dica:** o disco de saída precisa ter permissão de escrita. Discos **NTFS** são somente leitura no macOS, então use outro destino.

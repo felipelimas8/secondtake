@@ -26,6 +26,7 @@ import sys
 from dataclasses import dataclass, field
 
 from .i18n import L, Join, msg, t as tr
+from .safeio import atomic_write, unique_stem
 
 HDR = 262144                 # ftyp + uuid + free + cabeçalho mdat (layout XAVC S)
 MDAT_POS = HDR - 16          # 262128
@@ -45,6 +46,71 @@ EMPTY = 'VAZIO'
 UNKNOWN = 'DESCONHECIDO'
 
 REPAIRABLE = {HEADER, NO_MOOV, UNKNOWN}
+
+# saída apontando para a pasta dos originais: os resultados vão para esta subpasta,
+# que a análise de pasta ignora (para não listar os recuperados junto com os originais)
+SAME_FOLDER_DIR = 'Second Take'
+
+
+def same_dir(a: str, b: str) -> bool:
+    """Mesma pasta? Usa samefile (pega maiúsculas/minúsculas no APFS/NTFS e links)."""
+    try:
+        return os.path.samefile(a, b)
+    except OSError:
+        return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+
+
+def is_inside(child: str, parent: str) -> bool:
+    """`child` é subpasta de `parent` (não a mesma)? Compara caminhos reais, sem
+    diferença de maiúsculas/minúsculas no Mac/Windows e sem se enganar com /a/bc × /a/b."""
+    if same_dir(child, parent):
+        return False
+    c = os.path.normcase(os.path.realpath(os.path.abspath(child)))
+    p = os.path.normcase(os.path.realpath(os.path.abspath(parent)))
+    try:
+        return os.path.commonpath([c, p]) == p
+    except ValueError:                          # discos diferentes no Windows
+        return False
+
+
+def out_inside_source(out_dir: str, src_dirs) -> bool:
+    """Saída dentro de uma pasta de origem (fora a subpasta Second Take, que é a nossa)?"""
+    if os.path.basename(os.path.normpath(out_dir)) == SAME_FOLDER_DIR:
+        return False
+    return any(is_inside(out_dir, d) for d in src_dirs)
+
+
+class Cancelled(Exception):
+    """O usuário cancelou o lote. O clipe em andamento é descartado (o .part é apagado)."""
+
+
+def clip_out_dir(src_path: str, out_dir: str) -> str:
+    """Pasta onde o recuperado de `src_path` é gravado: `out_dir`, ou `out_dir/Second Take`
+    quando `out_dir` é a própria pasta do original."""
+    if same_dir(os.path.dirname(os.path.abspath(src_path)), out_dir):
+        return os.path.join(out_dir, SAME_FOLDER_DIR)
+    return out_dir
+
+
+def beside_dir(src_path: str) -> str:
+    """Modo "Salvar junto dos originais": `<pasta do clipe>/Second Take`."""
+    return os.path.join(os.path.dirname(os.path.abspath(src_path)), SAME_FOLDER_DIR)
+
+
+def group_by_folder(clips: list) -> dict[str, list]:
+    """{pasta do original: [clipes]} na ordem em que aparecem."""
+    groups: dict[str, list] = {}
+    for c in clips:
+        groups.setdefault(os.path.dirname(os.path.abspath(c.path)), []).append(c)
+    return groups
+
+
+def report_dir(out_dir: str, clips: list) -> str:
+    """Pasta do relatório CSV: junto dos recuperados."""
+    for c in clips:
+        if same_dir(os.path.dirname(os.path.abspath(c.path)), out_dir):
+            return os.path.join(out_dir, SAME_FOLDER_DIR)
+    return out_dir
 
 
 # ---------------------------------------------------------------- MP4 parsing
@@ -128,12 +194,13 @@ def parse_moov(moov: bytes) -> list[Track]:
     return tracks
 
 
-def find_moov(path: str) -> tuple[int, bytes] | None:
-    size = os.path.getsize(path)
-    base = max(0, size - TAIL_SCAN)
-    with open(path, 'rb') as f:
-        f.seek(base)
-        tail = f.read()
+TAIL_FIRST = 1 << 20         # 1ª leitura: 1 MB do fim (o moov da Sony tem poucas centenas de KB)
+
+
+def _find_moov_in(f, size: int, window: int) -> tuple[int, bytes] | None:
+    base = max(0, size - window)
+    f.seek(base)
+    tail = f.read()
     i = len(tail)
     while True:
         i = tail.rfind(b'moov', 0, i)
@@ -142,6 +209,17 @@ def find_moov(path: str) -> tuple[int, bytes] | None:
         msize = struct.unpack('>I', tail[i - 4:i])[0]
         if 8 < msize <= len(tail) - (i - 4) and b'trak' in tail[i:i - 4 + msize]:
             return base + i - 4, tail[i - 4:i - 4 + msize]
+
+
+def find_moov(path: str) -> tuple[int, bytes] | None:
+    """Procura o moov no fim do arquivo: primeiro em 1 MB e, só se não achar
+    (moov grande ou zeros de preenchimento depois dele), em TAIL_SCAN (16 MB)."""
+    size = os.path.getsize(path)
+    with open(path, 'rb') as f:
+        m = _find_moov_in(f, size, TAIL_FIRST)
+        if m is None and size > TAIL_FIRST:
+            m = _find_moov_in(f, size, TAIL_SCAN)
+    return m
 
 
 # ---------------------------------------------------------------- Sony XML
@@ -153,7 +231,7 @@ def sony_xml(path: str) -> dict:
         if not os.path.exists(cand):
             continue
         try:
-            import xml.etree.ElementTree as ET
+            from defusedxml import ElementTree as ET   # recusa entidades (XXE, "billion laughs")
             r = ET.parse(cand).getroot()
             ns = {'n': r.tag.split('}')[0][1:]}
             g = lambda q, a: (r.find(q, ns).get(a, '') if r.find(q, ns) is not None else '')  # noqa: E731
@@ -180,6 +258,8 @@ def sony_xml(path: str) -> dict:
             if tc_fps:
                 out['tc_fps'] = tc_fps
             return {k: v for k, v in out.items() if v and v != '4294967295'}
+        except ImportError:
+            raise
         except Exception:
             pass
     return {}
@@ -433,7 +513,7 @@ def diagnose(path: str) -> Clip:
 def scan(folder: str, progress=None) -> list[Clip]:
     files = []
     for dp, dn, fn in os.walk(folder):
-        dn[:] = [d for d in dn if not d.startswith('.') and d.upper() != 'SUB']
+        dn[:] = [d for d in dn if not d.startswith('.') and d.upper() != 'SUB' and d != SAME_FOLDER_DIR]
         for f in sorted(fn):
             if f.lower().endswith(VIDEO_EXT) and not f.startswith('._'):
                 files.append(os.path.join(dp, f))
@@ -566,6 +646,7 @@ def scan_files(paths: list[str], progress=None, max_refs: int = 30) -> list[Clip
 def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
     if c.status not in REPAIRABLE:
         raise ValueError(L('err.not_repairable', name=c.name, status=c.status))
+    out_dir = clip_out_dir(c.path, out_dir)      # nunca grava ao lado do original
     os.makedirs(out_dir, exist_ok=True)
     stem, ext = os.path.splitext(c.name)
     mode = c.extra.get('mode', 'cabecalho' if c.status == HEADER else 'reconstruir')
@@ -593,18 +674,21 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
     if mode == 'reconstruir':
         from . import rebuild as rb
         p = getattr(c, '_plan', None) or plan_rebuild(c, [c.reference])
-        dst = os.path.join(out_dir, f'{stem}_RECONSTRUIDO{out_ext(c.name)}')
+        oext = out_ext(c.name)
+        dst = unique_stem(out_dir, f'{stem}_RECONSTRUIDO', [oext]) + oext
         rb.write(c.path, p, dst, chunk_cb)
         c.output = dst
         return dst
     with open(c.reference, 'rb') as f:
         hdr = bytearray(f.read(HDR))
     hdr[HDR - 8:HDR] = struct.pack('>Q', c.moov_pos - MDAT_POS)
-    os.makedirs(out_dir, exist_ok=True)
-    stem, ext = os.path.splitext(c.name)
-    dst = os.path.join(out_dir, f'{stem}_REPARADO{out_ext(c.name)}')
+    oext = out_ext(c.name)
+    xml_src = os.path.splitext(c.path)[0] + 'M01.XML'
+    has_xml = os.path.exists(xml_src)
+    base = unique_stem(out_dir, f'{stem}_REPARADO', [oext, 'M01.XML'] if has_xml else [oext])
+    dst = base + oext
     copied = 0
-    with open(c.path, 'rb') as src, open(dst, 'wb') as out:
+    with open(c.path, 'rb') as src, atomic_write(dst) as out:
         src.seek(HDR)
         out.write(hdr)
         while True:
@@ -615,19 +699,69 @@ def repair(c: Clip, out_dir: str, chunk_cb=None) -> str:
             copied += len(b)
             if chunk_cb:
                 chunk_cb(copied, c.size)
-    for ext_xml in ('M01.XML',):
-        xml = os.path.splitext(c.path)[0] + ext_xml
-        if os.path.exists(xml):
-            shutil.copy2(xml, os.path.join(out_dir, f'{stem}_REPARADO{ext_xml}'))
+    if has_xml:
+        shutil.copy2(xml_src, base + 'M01.XML')
     c.output = dst
     return dst
 
 
-def run_quiet(cmd: list[str], **kw):
-    """subprocess.run sem abrir janela de console no Windows."""
+# espaço ocupado na saída, em múltiplos do tamanho do original, por modo de reparo.
+# Extração bruta: .h264 (~vídeo) + .wav + MP4 temporário + MP4 final -> perto de 3x no pico.
+SPACE_FACTOR = {'cabecalho': 1.05, 'reconstruir': 1.05, 'extrair': 3.0}
+
+
+def space_needed(clips: list[Clip]) -> int:
+    """Bytes livres necessários na pasta de saída para reparar `clips`."""
+    total = 0
+    for c in clips:
+        mode = c.extra.get('mode', 'cabecalho' if c.status == HEADER else 'reconstruir')
+        total += c.size * SPACE_FACTOR.get(mode, 3.0)
+    return int(total)
+
+
+# limites de tempo dos subprocessos (s): uma base fixa + o tamanho do arquivo numa taxa
+# bem conservadora, para nunca cortar um trabalho legítimo e ainda assim não travar
+# para sempre num arquivo que deixe o ffprobe/ffmpeg preso.
+FFPROBE_BASE_S, FFPROBE_RATE = 60, 10e6      # ffprobe -count_frames decodifica o clipe todo
+FFMPEG_BASE_S, FFMPEG_RATE = 60, 5e6         # ffmpeg -c copy (só E/S)
+
+
+def ffprobe_timeout(size: int) -> float:
+    return FFPROBE_BASE_S + size / FFPROBE_RATE
+
+
+def ffmpeg_timeout(size: int) -> float:
+    return FFMPEG_BASE_S + size / FFMPEG_RATE
+
+
+def run_quiet(cmd: list[str], timeout: float | None = None, cancel=None, **kw):
+    """subprocess.run sem abrir janela de console no Windows.
+
+    `timeout`: encerra o processo e levanta subprocess.TimeoutExpired.
+    `cancel` (threading.Event): se for acionado, encerra o processo e levanta Cancelled."""
     if sys.platform == 'win32':
         kw.setdefault('creationflags', 0x08000000)  # CREATE_NO_WINDOW
-    return subprocess.run(cmd, **kw)
+    if cancel is None:
+        return subprocess.run(cmd, timeout=timeout, **kw)
+    import time
+    text = kw.pop('text', False)
+    if kw.pop('capture_output', False):
+        kw['stdout'] = kw['stderr'] = subprocess.PIPE
+    deadline = None if timeout is None else time.monotonic() + timeout
+    with subprocess.Popen(cmd, text=text, **kw) as proc:
+        while True:
+            try:
+                out, err = proc.communicate(timeout=0.25)
+                return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+            except subprocess.TimeoutExpired:
+                if cancel.is_set():
+                    proc.kill()
+                    proc.communicate()
+                    raise Cancelled()
+                if deadline is not None and time.monotonic() > deadline:
+                    proc.kill()
+                    proc.communicate()
+                    raise subprocess.TimeoutExpired(cmd, timeout)
 
 
 def ffmpeg_bin(name='ffmpeg'):
@@ -651,7 +785,7 @@ def ffmpeg_bin(name='ffmpeg'):
     return None
 
 
-def verify(c: Clip) -> str:
+def verify(c: Clip, cancel=None) -> str:
     if c.extra.get('mode') == 'extrair':
         return c.verify
     ff = ffmpeg_bin()
@@ -662,9 +796,15 @@ def verify(c: Clip) -> str:
     if not fp:
         c.verify = L('verify.no_ffprobe')
         return c.verify
-    r = run_quiet([fp, '-v', 'error', '-count_frames', '-select_streams', 'v:0',
-                        '-show_entries', 'stream=nb_frames,nb_read_frames', '-of', 'csv=p=0',
-                        c.output], capture_output=True, text=True)
+    limit = ffprobe_timeout(os.path.getsize(c.output) if os.path.exists(c.output) else c.size)
+    try:
+        r = run_quiet([fp, '-v', 'error', '-count_frames', '-select_streams', 'v:0',
+                       '-show_entries', 'stream=nb_frames,nb_read_frames', '-of', 'csv=p=0',
+                       c.output], capture_output=True, text=True, timeout=limit, cancel=cancel)
+    except subprocess.TimeoutExpired:
+        # o subprocess.run já matou o ffprobe; o arquivo recuperado continua lá
+        c.verify = L('verify.timeout', s=int(limit))
+        return c.verify
     try:
         total, read = (int(x) for x in r.stdout.strip().split(',')[:2])
         lost = total - read
@@ -674,6 +814,17 @@ def verify(c: Clip) -> str:
     if c.audio_db is not None:
         c.verify = Join(c.verify, L('verify.audio_peak', db=c.audio_db))
     return c.verify
+
+
+CSV_FORMULA = ('=', '+', '-', '@', '\t', '\r')
+
+
+def csv_safe(v):
+    """Evita injeção de fórmula ao abrir o CSV no Excel/Numbers/Sheets: texto que começa
+    com = + - @ (ou tab/CR) ganha um apóstrofo na frente. Números ficam como estão."""
+    if isinstance(v, str) and v.startswith(CSV_FORMULA):
+        return "'" + v
+    return v
 
 
 def write_report(clips: list[Clip], path: str):
@@ -709,4 +860,4 @@ def write_report(clips: list[Clip], path: str):
             })
             if not row['fps'] and m.get('fps'):
                 row['fps'] = _fps_label(m['fps'])
-            w.writerow([row[k] for k in cols])
+            w.writerow([csv_safe(row[k]) for k in cols])
