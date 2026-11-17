@@ -31,7 +31,7 @@ def test_csv_safe_prefixes_formulas_only_in_text():
 
 
 def test_report_neutralizes_malicious_file_names(tmp_path):
-    folder = tmp_path / '=cmd|calc'
+    folder = tmp_path / '=cmd+calc'   # sem | (proibido no Windows)
     folder.mkdir()
     c = core.Clip(str(folder / '=HYPERLINK(1+1)-C0001.MP4'), 10, core.OK)
     c.audio_db = -80.0
