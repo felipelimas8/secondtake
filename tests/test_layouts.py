@@ -174,3 +174,59 @@ def test_rebuild_fx30_without_moov(folder):
     golden, audio = folder['src']['fx30_victim_golden']
     assert frame_md5s(out) == golden
     assert pcm(out) == audio
+
+
+# ---------------------------------------------------------------- .RSV real (sem cabeçalho)
+
+def make_raw_rsv(info, dst, cut_chunk=5, pad=1 << 20):
+    """.RSV como a câmera grava (medido num arquivo real da FX2): só o conteúdo do mdat,
+    com a 1ª amostra rtmd no byte 0, sem ftyp/uuid/free/mdat e sem moov; cortado no meio
+    de um bloco e seguido de zeros (o arquivo real tinha exatamente 256 MiB, fim zerado)."""
+    with open(info['path'], 'rb') as f:
+        f.seek(info['data_start'])
+        data = f.read(info['vid_offs'][cut_chunk] + 1000 - info['data_start'])
+    with open(dst, 'wb') as f:
+        f.write(data + b'\0' * pad)
+    return dst
+
+
+@pytest.mark.parametrize('cam, ref', [('fx3', 'A0001.MP4'), ('fx30', 'B0001.MP4')])
+def test_rsv_without_header_is_rebuilt(folder, cam, ref):
+    # Sem cabeçalho, nada no .RSV diz de que câmera ele veio: referências com o mesmo formato
+    # de bloco (rtmd, G, áudio) explicam os dados igualmente. O cabeçalho da saída vem da
+    # referência, então ela tem de ser da mesma câmera (no uso real: um clipe sadio dela na pasta).
+    d = folder['put'](f'{cam}_ref')
+    info = folder['src'][f'{cam}_victim']
+    rsv = make_raw_rsv(info, os.path.join(d, 'C0009.RSV'))
+    with open(rsv, 'rb') as f:
+        assert f.read(4) == b'\x00\x1c\x01\x00'                   # rtmd no byte 0, como na câmera
+    c = by(core.scan(d), 'C0009.RSV')
+    assert c.status == core.NO_MOOV and c.extra['mode'] == 'reconstruir'
+    assert os.path.basename(c.reference) == ref
+    out = core.repair(c, folder['out'])
+    golden, audio = folder['src'][f'{cam}_victim_golden']
+    got = frame_md5s(out)
+    assert got == golden[:len(got)] and len(got) >= 5 * 12 - 2   # 5 blocos inteiros (B-frames: -2)
+    assert pcm(out) == audio[:len(pcm(out))] and len(pcm(out)) >= 5 * info['a_chunk']
+    assert core.diagnose(out).status == core.OK                    # saída íntegra e reconhecida
+    # o mesmo trecho gravado COM cabeçalho (clipe normal sem moov) gera exatamente o mesmo arquivo:
+    # o .RSV sem cabeçalho só muda onde os dados estão na fonte, nunca o resultado
+    same = os.path.join(d, 'C0010.MP4')
+    with open(info['path'], 'rb') as f:
+        same_bytes = f.read(info['vid_offs'][5] + 1000)
+    with open(same, 'wb') as f:
+        f.write(same_bytes + b'\0' * (1 << 20))
+    c2 = core.diagnose(same)
+    core.plan_rebuild(c2, [os.path.join(d, ref)])
+    out2 = core.repair(c2, folder['out'])
+    assert open(out, 'rb').read() == open(out2, 'rb').read()
+
+
+def test_payload_start_detection(src, tmp_path):
+    from secondtake import rebuild as rb
+    assert rb.payload_start(src['fx3_ref']['path']) is None         # clipe normal: começa com ftyp
+    raw = make_raw_rsv(src['fx30_victim'], str(tmp_path / 'x.RSV'))
+    assert rb.payload_start(raw) == 0
+    junk = tmp_path / 'junk.RSV'
+    junk.write_bytes(os.urandom(4096))
+    assert rb.payload_start(str(junk)) is None

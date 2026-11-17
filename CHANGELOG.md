@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.12 — 2026-11-17
+- **`.RSV` de verdade**: o arquivo que a Sony deixa quando a gravação é interrompida (bateria, cartão retirado) não tem cabeçalho nenhum. Ele começa direto nos dados, com os metadados `rtmd` no byte 0 (medido num `.RSV` real de uma FX2). O app procurava os dados na posição de um clipe com cabeçalho e, sem achar, caía na extração bruta. Agora o início é detectado no próprio arquivo, e a reconstrução põe o cabeçalho de um clipe sadio na frente e desloca o índice. O resultado é idêntico ao da reconstrução do mesmo trecho gravado com cabeçalho.
+- Para recuperar um `.RSV`, deixe na mesma pasta um `.MP4` sadio **da mesma câmera, com as mesmas configurações**: sem cabeçalho, nada no `.RSV` diz de que câmera ele veio, e o cabeçalho da saída vem desse clipe.
+
 ## 0.9.11 — 2026-11-17
 - **XAVC HS (H.265), primeiro passo**: o app reconhece clipes HEVC (`hvc1`/`hev1`) e mostra no Detalhes o perfil, o nível, a amostragem 4:2:2 e o 10-bit (lidos do `hvcC`). A prévia de 3 quadros e a **troca de cabeçalho** (cabeçalho corrompido, índice íntegro) funcionam, com preferência por uma referência também H.265.
 - **XAVC HS sem índice**: a reconstrução e a extração bruta ainda não entendem H.265. Esses clipes aparecem como "XAVC HS (H.265) sem índice: reconstrução ainda não suportada" e ficam fora do lote, em vez de passar pelo leitor H.264. O codec é detectado também pelo conteúdo do arquivo quando o índice e o XML sumiram, e uma referência H.265 nunca é usada para reconstruir um clipe H.264.
